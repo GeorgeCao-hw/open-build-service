@@ -204,11 +204,12 @@ sub cleanup_job {
 
   # if this is a chroot like case, get rid of it after the build
   if ((!$vm || $vm eq 'lxc' || $vm eq 'docker' || $vm eq 'nspwan') && $cleanup_chroot && -d $buildroot) {
-      printf "Removing buildroot $buildroot";
+      print "Removing buildroot $buildroot...";
       eval {
         rm_rf($buildroot);
         mkdir_p($buildroot);
-      }
+      };
+      print "\n";
   }
 
 }
@@ -2904,6 +2905,7 @@ sub createreport {
         'binaryarch' => $s[4],
       };
       $bin->{'disturl'} = $s[5] if $s[5] ne '(none)' && $s[5] ne 'None';
+      $bin->{'license'} = $s[6] if $s[6];
       $bin->{'package'} = $1 if $s[5] =~ /.*\/[^-]*-(.*)$/; # container case
       $bin->{'epoch'} = $s[1] if $s[1] ne '' && $s[1] ne '(none)' && $s[1] ne 'None';
       if ($s[1] eq 'None' && $s[3] eq 'None') {
@@ -3926,12 +3928,14 @@ eval {
   $ex = dobuild($buildinfo);
 };
 if ($@) {
-  append_nonfatal("$buildroot/.build.log", $workerid ? "$@(worker was $workerid)\n" : $@);
-  print $@;
   $ex = 1;
   # mark as bad build host if Build.pm could not be imported
   $ex = 3 unless defined &Build::queryhdrmd5;
   $ex = 3 if $@ =~ /^500 /;
+  # catch disk full errors before the build script could be even started
+  $ex = 3 if $@ =~ /No space left on device/;
+  append_nonfatal("$buildroot/.build.log", $workerid ? "$@(worker was $workerid)\n" : $@);
+  print $@;
 }
 if ($buildinfo->{'followupfile'}) {
   my $buildsrcdir = "$buildroot/.build.packages/SOURCES";
@@ -4048,6 +4052,7 @@ if ($ex == 0) {
   @d = ('KIWI') if $buildinfo->{'file'} =~ /\.kiwi$/;
   @d = ('DOCKER') if $buildinfo->{'file'} =~ /Dockerfile$/;
   @d = ('FISSILE') if $buildinfo->{'file'} =~ /fissile\.yml$/;
+  @d = ('HELM') if $buildinfo->{'file'} =~ /Chart\.yaml$/;
   push @d, 'OTHER';
   for my $d ('.', @d) {
     my @files = sort(ls("$buildroot/.build.packages/$d"));
@@ -4097,7 +4102,7 @@ if ($ex == 0) {
 }
 my $code;
 if (!$ex) {
-  print "build succeeded, send everything back...\n";
+  print "build succeeded, sending everything back...\n";
   $code = 'succeeded';
 } elsif ($ex == 2) {
   print "build succeeded, but does not differ from old build result...\n";

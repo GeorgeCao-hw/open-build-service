@@ -22,8 +22,8 @@ class Webui::PackageController < Webui::WebuiController
   before_action :require_architecture, only: [:binary, :binary_download]
   before_action :check_ajax, only: [:update_build_log, :devel_project, :buildresult, :rpmlint_result]
   # make sure it's after the require_, it requires both
-  before_action :require_login, except: [:show, :index, :dependency, :branch_diff_info, :binary, :binaries,
-                                         :users, :requests, :statistics, :commit, :revisions, :rdiff, :view_file, :live_build_log,
+  before_action :require_login, except: [:show, :index, :branch_diff_info, :binaries,
+                                         :users, :requests, :statistics, :revisions, :view_file, :live_build_log,
                                          :update_build_log, :devel_project, :buildresult, :rpmlint_result, :rpmlint_log, :meta, :files]
 
   before_action :check_build_log_access, only: [:live_build_log, :update_build_log]
@@ -174,9 +174,7 @@ class Webui::PackageController < Webui::WebuiController
     @filename = File.basename(params[:filename])
 
     @fileinfo = Backend::Api::BuildResults::Binaries.fileinfo_ext(@project, @package_name, @repository.name, @arch.name, @filename)
-    unless @fileinfo
-      raise ActiveRecord::RecordNotFound, 'Not Found'
-    end
+    raise ActiveRecord::RecordNotFound, 'Not Found' unless @fileinfo
 
     url_generator = ::PackageControllerService::URLGenerator.new(project: @project, package: @package_name,
                                                                  user: User.possibly_nobody, arch: @arch,
@@ -193,9 +191,7 @@ class Webui::PackageController < Webui::WebuiController
     @package_name = params[:package]
 
     results_from_backend = Buildresult.find_hashed(project: @project, package: @package_name, repository: @repository, view: ['binarylist', 'status'])
-    if results_from_backend.empty?
-      raise ActiveRecord::RecordNotFound, 'Not Found'
-    end
+    raise ActiveRecord::RecordNotFound, 'Not Found' if results_from_backend.empty?
 
     @buildresults = []
     repository = Repository.find_by_project_and_name(@project.to_s, @repository)
@@ -235,9 +231,10 @@ class Webui::PackageController < Webui::WebuiController
       return
     end
 
-    revision = (params[:rev] || @package.rev).to_i
-    per_page = params['show_all'] ? revision : 20
-    @revisions = Kaminari.paginate_array((1..revision).to_a.reverse).page(params[:page]).per(per_page)
+    per_page = 20
+    revision_count = (params[:rev] || @package.rev).to_i
+    per_page = params['show_all'] ? revision_count : per_page if User.session
+    @revisions = Kaminari.paginate_array((1..revision_count).to_a.reverse).page(params[:page]).per(per_page)
   end
 
   def rdiff
@@ -475,9 +472,10 @@ class Webui::PackageController < Webui::WebuiController
     rescue Timeout::Error, IOError
       @log_chunk = ''
     rescue Backend::Error => e
-      if %r{Logfile is not that big}.match?(e.summary)
+      case e.summary
+      when /Logfile is not that big/
         @log_chunk = ''
-      elsif /start out of range/.match?(e.summary)
+      when /start out of range/
         # probably build compare has cut log and offset is wrong, reset offset
         @log_chunk = ''
         @offset = old_offset
@@ -594,17 +592,11 @@ class Webui::PackageController < Webui::WebuiController
 
     authorize @package, :save_meta_update?
 
-    if FlagHelper.xml_disabled_for?(@meta_xml, 'sourceaccess')
-      errors << 'admin rights are required to raise the protection level of a package'
-    end
+    errors << 'admin rights are required to raise the protection level of a package' if FlagHelper.xml_disabled_for?(@meta_xml, 'sourceaccess')
 
-    if @meta_xml['project'] && @meta_xml['project'] != @project.name
-      errors << 'project name in xml data does not match resource path component'
-    end
+    errors << 'project name in xml data does not match resource path component' if @meta_xml['project'] && @meta_xml['project'] != @project.name
 
-    if @meta_xml['name'] && @meta_xml['name'] != @package.name
-      errors << 'package name in xml data does not match resource path component'
-    end
+    errors << 'package name in xml data does not match resource path component' if @meta_xml['name'] && @meta_xml['name'] != @package.name
 
     if errors.empty?
       begin
@@ -855,7 +847,7 @@ class Webui::PackageController < Webui::WebuiController
         comment: last_req.comment
       }
     end
-    return
+    nil
   end
 
   def get_diff(project, package, options = {})
@@ -897,7 +889,7 @@ class Webui::PackageController < Webui::WebuiController
         ld = js.get('lastduration')
         @percent = (@buildtime * 100) / ld.to_i if ld.present?
       end
-    rescue
+    rescue StandardError
       @workerid = nil
       @buildtime = nil
     end

@@ -37,7 +37,7 @@ class RequestController < ApplicationController
     params[:ids] = params[:ids].split(',').map(&:to_i) if params[:ids]
 
     rel = BsRequest.find_for(params)
-    rel = rel.limit(params[:limit].to_i) if params[:limit].to_i > 0
+    rel = rel.limit(params[:limit].to_i) if params[:limit].to_i.positive?
 
     rel = BsRequest.where(id: rel.select(:id)).preload([{ bs_request_actions: :bs_request_action_accept_info, reviews: { history_elements: :user } }])
     xml = Nokogiri::XML('<collection/>', &:strict).root
@@ -59,9 +59,7 @@ class RequestController < ApplicationController
 
   # POST /request?cmd=create
   def global_command
-    unless params[:cmd] == 'create'
-      raise UnknownCommandError, "Unknown command '#{params[:cmd]}' for path #{request.path}"
-    end
+    raise UnknownCommandError, "Unknown command '#{params[:cmd]}' for path #{request.path}" unless params[:cmd] == 'create'
 
     # refuse request creation for anonymous users
     require_login
@@ -174,9 +172,7 @@ class RequestController < ApplicationController
     end
 
     diff_text = ''
-    if params[:view] == 'xml'
-      xml_request = Nokogiri::XML("<request id='#{req.number}'/>", &:strict).root
-    end
+    xml_request = Nokogiri::XML("<request id='#{req.number}'/>", &:strict).root if params[:view] == 'xml'
 
     req.bs_request_actions.each do |action|
       withissues = params[:withissues].to_s.in?(['1', 'true'])

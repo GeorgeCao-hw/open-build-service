@@ -14,9 +14,7 @@ module Webui::BuildresultHelper
       theclass = 'text-warning' if code == 'scheduled' && link_title.present?
     end
 
-    if flipper_responsive?
-      return build_state(code: code, css_class: theclass, package_name: package_name, status_id: status_id, repo: repo, arch: arch)
-    end
+    return build_state(code: code, css_class: theclass, package_name: package_name, status_id: status_id, repo: repo, arch: arch) if feature_enabled?(:responsive_ux)
 
     capture do
       if enable_help && status['code']
@@ -62,6 +60,18 @@ module Webui::BuildresultHelper
         concat(tag.i(nil, class: ['fas', 'fa-chevron-left', 'expander'], title: "Show build results for this #{collapse_text}"))
         concat(tag.i(nil, class: ['fas', 'fa-chevron-down', 'collapser'], title: "Hide build results for this #{collapse_text}"))
       end
+    end
+  end
+
+  # Paints an rpmlog line green-ish when the line has a Warning and red when it has an error.
+  def colorize_line(line)
+    case line
+    when /\w+(?:\.\w+)+: W: /
+      tag.span(line.strip, style: 'color: olive;')
+    when /\w+(?:\.\w+)+: E: /
+      tag.span(line.strip, style: 'color: red;')
+    else
+      line.strip
     end
   end
 end

@@ -22,9 +22,7 @@ class MaintenanceIncident < ApplicationRecord
 
       # publish is disabled, just patchinfos get enabled
       target_project.flags.create(flag: 'publish', status: 'disable')
-      if no_access
-        target_project.flags.create(flag: 'access', status: 'disable')
-      end
+      target_project.flags.create(flag: 'access', status: 'disable') if no_access
 
       # take over roles from maintenance project
       project.relationships.each do |r|
@@ -33,9 +31,7 @@ class MaintenanceIncident < ApplicationRecord
 
       # set default bugowner if missing
       bugowner = Role.hashed['bugowner']
-      unless target_project.relationships.users.where('role_id = ?', bugowner.id).exists?
-        target_project.add_user(User.session!, bugowner)
-      end
+      target_project.add_user(User.session!, bugowner) unless target_project.relationships.users.exists?(['role_id = ?', bugowner.id])
 
       # and write it
       target_project.kind = 'maintenance_incident'
@@ -63,8 +59,7 @@ class MaintenanceIncident < ApplicationRecord
                                       maintenance_db_project_id]
       self.incident_id = r[0]
     end
-    name = maintenance_db_project.name + ':' + incident_id.to_s
-    name
+    maintenance_db_project.name + ':' + incident_id.to_s
   end
 
   def getUpdateinfoCounter(time, template = '%Y-%C')

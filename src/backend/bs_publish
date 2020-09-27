@@ -57,6 +57,7 @@ use BSPGP;
 use BSHTTP;
 use BSRepServer::Containerinfo;
 use BSPublisher::Container;
+use BSPublisher::Helm;
 use BSPublisher::Util;
 use BSPublisher::Blobstore;
 
@@ -793,6 +794,27 @@ sub createrepo_virtbuilder {
   }
 }
 
+sub createrepo_helm {
+  my ($extrep, $projid, $repoid, $data, $options, $containers) = @_;
+  print "    generating helm chart index\n";
+  my $downloadurl = BSUrlmapper::get_downloadurl("$projid/$repoid");
+  unlink("$extrep/index.yaml");
+  my %entries;
+  for my $p (sort keys %$containers) {
+    next unless ($containers->{$p}->{'type'} || '') eq 'helm';
+    my $helminfo = $containers->{$p};
+    my $entry = BSPublisher::Helm::mkindexentry($helminfo, $downloadurl ? "${downloadurl}$p" : undef);
+    push @{$entries{$helminfo->{'name'}}}, $entry if $entry;
+  }
+  my $index_yaml = BSPublisher::Helm::mkindex_yaml(\%entries);
+  writestr("$extrep/index.yaml", undef, $index_yaml);
+}
+
+sub deleterepo_helm {
+  my ($extrep, $projid) = @_;
+  unlink("$extrep/index.yaml");
+}
+
 sub createrepo_hdlist2 {
   my ($extrep, $projid, $repoid, $data, $options) = @_;
 
@@ -1521,6 +1543,13 @@ sub sync_to_stage {
   qsystem('rsync', '-a', @rsync_extra_options, '--timeout', '120', "$extrepodir_sync/$filename", $BSConfig::stageserver_sync."/".$filename) && warn("    trigger rsync failed at ".localtime(time).": $?\n");
 }
 
+sub create_blobdir {
+  my $blobdir = "$uploaddir/publisher.$$.blobs";
+  BSUtil::cleandir($blobdir);
+  mkdir_p($blobdir);
+  return $blobdir;
+}
+
 sub clean_blobdir {
   my ($blobdir) = @_;
   return unless $blobdir;
@@ -1641,7 +1670,8 @@ sub deleterepo {
 }
 
 sub mapsleimage {
-  my ($config, $rdir, $rbin, $p, $media) = @_;
+  my ($data, $rdir, $rbin, $p) = @_;
+  my $origp = $p;
   if ($p =~ /-Build\d+/) {
     $rbin =~ s/\.asc$//;
     $rbin =~ s/\.sha256$//;
@@ -1649,14 +1679,104 @@ sub mapsleimage {
     $rbin =~ s/\.(?:bz2|gz|xz|zst)$//;
     $rbin =~ s/\.(iso|packages|raw|tbz|tgz|tar|qcow2|vhdx|vmdk|vmx|vagrant\..*\.box)$//;
     my $milestone = readstr("$rdir/$rbin.milestone", 1);
-    chomp $milestone;
+    chomp($milestone) if defined $milestone;
     $milestone ||= 'GM';
-    $milestone = Build::Rpm::expandmacros($config, $milestone) if $milestone =~ /%/;
+    $milestone = Build::Rpm::expandmacros($data->{'config'}, $milestone) if $milestone =~ /%/;
     $milestone =~ s/[\/\n]/_/sg;
-    $p =~ s/-Build\d+(\.\d+)?/-$milestone/;
+    $p =~ s/-Build\d+(\.\d+)?(\.\d+)?/-$milestone/;
   }
-  $p =~ s/-Media/-DVD/ if $media eq 'dvd';
+  $p =~ s/-Media/-DVD/ if $data->{'media'} eq 'dvd';
+  $data->{'mapped'}->{$origp} = $p if $p ne $origp;
   return $p;
+}
+
+sub depgp {
+  my ($content) = @_;
+  if ($content =~ /-----BEGIN PGP SIGNED MESSAGE-----\n/s) {
+    $content =~ s/.*-----BEGIN PGP SIGNED MESSAGE-----//s;
+    $content =~ s/.*?\n\n//s;
+    $content =~ s/-----BEGIN PGP SIGNATURE-----.*//s;
+    return ($content, 1);
+  }
+  return ($content, 0);
+}
+
+sub fixsleimage {
+  my ($data, $p, $origin) = @_;
+  return 0 unless $origin;
+  die unless -e $origin;
+  return 0 unless -f _ && -s _ < 1000000;
+  my $pdir = '';
+  $pdir = $1 if $p =~ /(.*\/)/;
+  my $changed;
+  my ($content, $hadsig) = depgp(readstr($origin));
+  my $newcontent = '';
+  my $mapped = $data->{'mapped'};
+  for (split("\n", $content)) {
+    if (/  (.*)$/ && $mapped->{"$pdir$1"}) {
+      my $f = $1;
+      s/  .*/  $mapped->{"$pdir$f"}/;
+      s/  \Q$pdir\E/  / if $pdir ne '';
+      $changed = 1;
+    }
+    $newcontent .= "$_\n";
+  }
+  return 0 unless $changed;
+  my $extrep = $data->{'extrep'};
+  my $bins_id = $data->{'bins_id'};
+  my @s = lstat("$extrep/$p");
+  if (-d _) {
+    BSUtil::cleandir("$extrep/$p");
+    rmdir("$extrep/$p") || die("rmdir $extrep/$p: $!\n");
+    print "      ! $p\n";
+  } elsif (-f _ && -s _ < 1000000) {
+    my ($econtent, $ehadsig) = depgp(readstr("$extrep/$p"));
+    if ($newcontent eq $econtent && $hadsig == $ehadsig) {
+      $bins_id->{$p} = "$s[9]/$s[7]/$s[1]";
+      return 0 unless $bins_id->{"$p.asc"};
+      if (-s "$extrep/$p.asc") {
+	@s = stat(_);
+        $bins_id->{"$p.asc"} = "$s[9]/$s[7]/$s[1]";
+        return 0;
+      }
+    }
+    print "      ! $p\n";
+  } else {
+    print "      + $p\n";
+  }
+  unlink("$extrep/$p");
+  mkdir_p(($p =~ /(.*)\//) ? "$extrep/$1" : $extrep);
+  writestr("$extrep/$p", undef, $newcontent);
+  if ($BSConfig::sign && ($hadsig || $bins_id->{"$p.asc"})) {
+    if (!$data->{'signargs'}) {
+      my $projid = $data->{'projid'};
+      my ($pubkey, $signargs) = getsigndata($projid);
+      my @signargs;
+      push @signargs, '--project', $projid if $BSConfig::sign_project;
+      push @signargs, @$signargs;
+      $data->{'signargs'} = \@signargs;
+    }
+    my @signargs = @{$data->{'signargs'}};
+    if ($hadsig) {
+      qsystem($BSConfig::sign, @signargs, '-c', "$extrep/$p") && die("    sign failed: $?\n");
+    }
+    if ($bins_id->{"$p.asc"}) {
+      if (-e "$extrep/$p.asc") {
+	print "      ! $p.asc\n";
+      } else {
+	print "      + $p.asc\n";
+      }
+      unlink("$extrep/$p.asc");
+      qsystem($BSConfig::sign, @signargs, '-d', "$extrep/$p") && die("    sign failed: $?\n");
+      @s = stat("$extrep/$p.asc");
+      die unless @s;
+      $bins_id->{"$p.asc"} = "$s[9]/$s[7]/$s[1]";
+    }
+  }
+  @s = stat("$extrep/$p");
+  die unless @s;
+  $bins_id->{$p} = "$s[9]/$s[7]/$s[1]";
+  return 1;
 }
 
 sub publish {
@@ -1722,7 +1842,7 @@ sub publish {
 
   # do we need to do source publishing?
   my $do_sourcepublish;
-  if ($BSConfig::sourcepublish_sync || $BSConfig::sourcepublish_sync) {
+  if ($BSConfig::sourcepublish_sync) {
     if ($BSConfig::sourcepublish_filter) {
       $do_sourcepublish = 1 if grep {$prp =~ /^$_/} @$BSConfig::sourcepublish_filter;
     } else {
@@ -1737,9 +1857,6 @@ sub publish {
     BSVerify::verify_filename($subdir);
   }
   
-  # correctly do iso image renaming where configured
-  my $sleimage = $repotype{'sleimage'} ? 'dvd' : $repotype{'sleimage-media'} ? 'media' : undef;
-
   my ($extrep, $stageservers, $triggerstring) = BSUrlmapper::get_extrep_stageservers($prp);
   return unless $extrep;
   my $prp_ext = $prp;
@@ -1779,6 +1896,13 @@ sub publish {
   my $kiwiindex = '';	# store collected index parts
 
   my %containers;
+
+  # do iso image renaming where configured
+  my $sleimagedata;
+  if ($repotype{'sleimage'} || $repotype{'sleimage-media'}) {
+    my $media = $repotype{'sleimage'} ? 'dvd' : $repotype{'sleimage-media'} ? 'media' : undef;
+    $sleimagedata = { 'projid' => $projid, 'extrep' => $extrep, 'bins_id' => \%bins_id, 'media' => $media, 'config' => $config, 'mapped' => {} };
+  }
 
   if ($archorder) {
     my %archorder = map {$_ => 1} @$archorder;
@@ -1885,11 +2009,7 @@ sub publish {
       }
       if ($bin =~ /^_blob\.sha256:[0-9a-f]{64}$/) {
 	# container blobid, collect
-	if (!$blobdir) {
-	  $blobdir = "$uploaddir/publisher.$$.blobs";
-	  BSUtil::cleandir($blobdir);
-	  mkdir_p($blobdir);
-	}
+	$blobdir ||= create_blobdir();
 	if (! -e "$blobdir/$bin") {
 	  link("$r/$bin", "$blobdir/$bin") || die("link $r/$bin: $blobdir/$bin$!\n");
 	}
@@ -1929,19 +2049,36 @@ sub publish {
 	if ($bin =~ /\.iso(?:\.sha256(?:\.asc)?)?$/) {
 	  $p = "iso/$bin";
 	  $kiwimedium = "$arch/$1" if $bin =~ /(.+)\.iso$/;
-    	  $p = mapsleimage($config, "$reporoot/$prp/$arch/:repo", $rbin, $p, $sleimage) if $sleimage;
+    	  $p = mapsleimage($sleimagedata, "$reporoot/$prp/$arch/:repo", $rbin, $p) if $sleimagedata;
 	} elsif ($bin =~ /ONIE\.bin(?:\.sha256(?:\.asc)?)?$/) {
 	  $p = "onie/$bin";
 	  $kiwimedium = "$arch/$1" if $bin =~ /(.+)ONIE\.bin$/;
 	} elsif ($bin =~ /(.*)\.raw(?:\.install)?(?:\.(?:gz|bz2|xz))?(?:\.sha256(?:\.asc)?)?$/) {
 	  $p = $bin;
-	  $p = mapsleimage($config, "$reporoot/$prp/$arch/:repo", $rbin, $p, $sleimage) if $sleimage;
+	  $p = mapsleimage($sleimagedata, "$reporoot/$prp/$arch/:repo", $rbin, $p) if $sleimagedata;
 	  $kiwimedium = "$arch/$1" if !$2 && -e "$r/$1.packages";
 	} elsif ($bin =~ /(.*)\.install.tar?(?:\.sha256(?:\.asc)?)?$/) {
           # kiwi has uncompressed install.tar (because internal compressed) since 17 Jul 2019
 	  $p = $bin;
-	  $p = mapsleimage($config, "$reporoot/$prp/$arch/:repo", $rbin, $p, $sleimage) if $sleimage;
+	  $p = mapsleimage($sleimagedata, "$reporoot/$prp/$arch/:repo", $rbin, $p) if $sleimagedata;
 	  $kiwimedium = "$arch/$1" if !$2 && -e "$r/$1.packages";
+	} elsif ($bin =~ /(.*)\.tgz$/ && -e "$r/$1.helminfo") {
+	  my @s = stat("$r/$rbin");
+	  next unless @s;
+	  eval { $containerinfo = BSPublisher::Helm::readhelminfo($r, "$1.helminfo") };
+          if ($containerinfo) {
+	    $p = $bin;
+	    $containerinfo->{'arch'} = $arch;
+	    $containerinfo->{'_id'} = "$s[9]/$s[7]/$s[1]";
+	    $containerinfo->{'_origin'} = $repoinfo->{'binaryorigins'}->{$rbin} if defined $repoinfo->{'binaryorigins'}->{$rbin};
+	    $containerinfo->{'publishfile'} = "$extrep/$p";
+	    $containers{$p} = $containerinfo;
+	  }
+	} elsif ($bin =~ /(.*)\.tgz.prov$/ && -e "$r/$1.helminfo") {
+          eval {
+	    BSPublisher::Helm::readhelminfo($r, "$1.helminfo");
+	    $p = $bin;
+          };
 	} elsif ($bin =~ /\.containerinfo$/) {
 	  # handle the case where there is a containerinfo with no tar file
 	  my @s = stat("$r/$bin");
@@ -1978,7 +2115,7 @@ sub publish {
 	      undef $containerinfo if $3;
 	    }
 	  } else {
-	    $p = mapsleimage($config, "$reporoot/$prp/$arch/:repo", $rbin, $p, $sleimage) if $sleimage;
+	    $p = mapsleimage($sleimagedata, "$reporoot/$prp/$arch/:repo", $rbin, $p) if $sleimagedata;
 	  }
 	} elsif ($bin =~ /(.*)\.tar(?:\.(?:gz|bz2|xz))?(\.sha256(?:\.asc)?)?$/) {
           # Dockerfile case
@@ -2014,14 +2151,17 @@ sub publish {
         } elsif ($bin =~ /^(.*)\.(?:box|json|ovf|phar|qcow2|vdi|vhdfixed|vmx|vmdk|vhdx)(?:\.xz)?(\.sha256(?:\.asc)?)?$/) {
 	  $p = $bin;
           $kiwimedium = "$arch/$1" if !$2 && -e "$r/$1.packages";
-          $p = mapsleimage($config, "$reporoot/$prp/$arch/:repo", $rbin, $p, $sleimage) if $sleimage;
+	  $p = mapsleimage($sleimagedata, "$reporoot/$prp/$arch/:repo", $rbin, $p) if $sleimagedata;
         } elsif ($bin =~ /\.packages$/) {
+          # FIXME2.11: to be removed
+	  next unless $config->{'publishflags:withreports'};
           $p = $bin;
-          $p = mapsleimage($config, "$reporoot/$prp/$arch/:repo", $rbin, $p, $sleimage) if $sleimage;
+	  $p = mapsleimage($sleimagedata, "$reporoot/$prp/$arch/:repo", $rbin, $p) if $sleimagedata;
         } elsif ($bin =~ /^(.*)\.report$/) {
 	  # collect reports
 	  $kiwireport{"$arch/$1"} = readxml("$r/$rbin", $BSXML::report, 1) if $do_packtrack || $do_sourcepublish;
-	  next;
+	  next unless $config->{'publishflags:withreports'};
+	  $p = $bin;
 	} elsif ($bin =~ /^(.*)\.index$/) {
 	  # collect virt-builder index parts
 	  $kiwiindex .= readstr("$r/$bin", 1) . "\n";
@@ -2035,7 +2175,7 @@ sub publish {
 	    if ($name eq 'nobuildid') {
 	      $p = "repo/$bin";
 	      $p =~ s/-Build[\d\.]+-/-/;
-	    } elsif ($bin =~ /.*-Media1(\.license|)$/) {
+	    } elsif ($bin =~ /.*-Media1?(\.license|)$/) {
 	      $p = "$name$1";
 	    } elsif ($bin =~ /-Media3$/) {
 	      $p = "${name}_debug";
@@ -2149,15 +2289,12 @@ sub publish {
       my $containerinfo = $containers{$p};
       if ($containerinfo->{'publishfile'}) {
 	# link container into the blobdir
-	if (!$blobdir) {
-	  $blobdir = "$uploaddir/publisher.$$.blobs";
-	  BSUtil::cleandir($blobdir);
-	  mkdir_p($blobdir);
-	}
+	$blobdir ||= create_blobdir();
 	my $tmpfile = "$blobdir/$containerinfo->{'arch'}:$pp";
 	link($bins{$p}, $tmpfile) || die("link $bins{$p} $tmpfile: $!\n");
 	$containerinfo->{'publishfile'} = $tmpfile;
       }
+      next if ($containerinfo->{'type'} || '') eq 'helm';	# keep helm charts
       delete $bins{$p};
       delete $bins{"$p.sha256"};
       delete $binaryorigins->{$p};
@@ -2197,6 +2334,13 @@ sub publish {
       $binaryorigins->{$p} = $containerinfo->{'_origin'};
       push @changed, "$extrep/$p";
       $changed = 1;
+    }
+  }
+
+  # fix sha256 checksum files of mapped iso files
+  if ($sleimagedata && %{$sleimagedata->{'mapped'}}) {
+    for my $p (grep {/\.sha256$/} sort keys %bins) {
+      $changed = 1 if fixsleimage($sleimagedata, $p, $bins{$p});
     }
   }
 
@@ -2521,8 +2665,8 @@ sub publish {
       if ($do_sourcepublish) {
         my $pt = $packtrack->{$bin};
         if ($pt->{'disturl'} && $pt->{'disturl'} =~ /^obs:\/\/[^\/]*\/([^\/]*)\/[^\/]*\/([^-]*)-(.*)$/) {
-	  $sourceid = "$1/$3/$2";
-	  $sources->{$sourceid} = [];
+          $sourceid = "$1/$3/$2";
+          $sources->{$sourceid} = [];
         }
       }
 
@@ -2765,6 +2909,9 @@ sub publish {
     createrepo_zyppservice($extrep, $projid, $xrepoid, $data, $repotype{'zyppservice'});
   } else {
     deleterepo_zyppservice($extrep, $projid, $xrepoid, $data);
+  }
+  if ($repotype{'helm'}) {
+    createrepo_helm($extrep, $projid, $xrepoid, $data, $repotype{'helm'}, \%containers);
   }
 
   if ($patterntype{'ymp'}) {

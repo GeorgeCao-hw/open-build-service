@@ -20,6 +20,7 @@ RSpec.describe Webui::Users::NotificationsController do
   end
 
   before do
+    Flipper[:notifications_redesign].enable
     login user_to_log_in
   end
 
@@ -97,13 +98,13 @@ RSpec.describe Webui::Users::NotificationsController do
   describe 'PUT #update' do
     context 'when a user marks one of his unread notifications as read' do
       subject! do
-        put :update, params: { id: state_change_notification.id, user_login: user_to_log_in.login }
+        put :update, params: { id: state_change_notification.id, user_login: user_to_log_in.login }, xhr: true
       end
 
       let(:user_to_log_in) { user }
 
-      it 'redirects back' do
-        expect(response).to redirect_to(root_path)
+      it 'succeeds' do
+        expect(response).to have_http_status(:ok)
       end
 
       it 'flashes a success message' do
@@ -117,14 +118,14 @@ RSpec.describe Webui::Users::NotificationsController do
 
     context 'when a user marks one of his read notifications as unread' do
       subject! do
-        put :update, params: { id: read_notification.id, user_login: user_to_log_in.login }
+        put :update, params: { id: read_notification.id, user_login: user_to_log_in.login }, xhr: true
       end
 
       let(:read_notification) { create(:web_notification, :request_state_change, subscriber: user, delivered: true) }
       let(:user_to_log_in) { user }
 
-      it 'redirects back' do
-        expect(response).to redirect_to(root_path)
+      it 'succeeds' do
+        expect(response).to have_http_status(:ok)
       end
 
       it 'flashes a success message' do
@@ -133,6 +134,26 @@ RSpec.describe Webui::Users::NotificationsController do
 
       it 'sets the notification as not delivered' do
         expect(read_notification.reload.delivered).to be false
+      end
+    end
+  end
+
+  context 'with feature flag not enabled' do
+    before do
+      Flipper[:notifications_redesign].disable
+      login user_to_log_in
+    end
+
+    describe 'GET #index' do
+      let(:user_to_log_in) { user }
+      let(:default_params) { { user_login: username } }
+
+      subject! do
+        get :index, params: default_params
+      end
+
+      it 'returns not_found status' do
+        expect(response.status).to be 404
       end
     end
   end

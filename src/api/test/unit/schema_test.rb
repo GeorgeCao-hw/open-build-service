@@ -5,16 +5,13 @@ class SchemaTest < ActiveSupport::TestCase
   test 'schemas' do
     Find.find(CONFIG['schema_location']).each do |f|
       io = nil
-      if %r{\.rng$}.match?(f)
-        testfile = f.gsub(%r{\.rng$}, '.xml')
-        if File.exist?(testfile)
-          io = IO.popen("xmllint --noout --relaxng #{f} #{testfile} 2>&1 > /dev/null", 'r')
-        end
-      elsif %r{xsd}.match?(f)
-        testfile = f.gsub(%r{\.xsd$}, '.xml')
-        if File.exist?(testfile)
-          io = IO.popen("xmllint --noout --schema #{f} #{testfile} 2>&1 > /dev/null", 'r')
-        end
+      case f
+      when /\.rng$/
+        testfile = f.gsub(/\.rng$/, '.xml')
+        io = IO.popen("xmllint --noout --relaxng #{f} #{testfile} 2>&1 > /dev/null", 'r') if File.exist?(testfile)
+      when /xsd/
+        testfile = f.gsub(/\.xsd$/, '.xml')
+        io = IO.popen("xmllint --noout --schema #{f} #{testfile} 2>&1 > /dev/null", 'r') if File.exist?(testfile)
       end
       next unless io
 

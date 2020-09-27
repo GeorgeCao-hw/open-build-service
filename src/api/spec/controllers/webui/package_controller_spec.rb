@@ -402,7 +402,7 @@ RSpec.describe Webui::PackageController, vcr: true do
     end
 
     context 'without permissions' do
-      let(:post_url) { /#{CONFIG['source_url']}\/source\/#{source_project}\/#{service_package}\.*/ }
+      let(:post_url) { %r{#{CONFIG['source_url']}/source/#{source_project}/#{service_package}\.*} }
       let(:other_user) { create(:confirmed_user) }
 
       before do
@@ -525,6 +525,7 @@ RSpec.describe Webui::PackageController, vcr: true do
   describe 'GET #rdiff' do
     context 'when no difference in sources diff is empty' do
       before do
+        login user
         get :rdiff, params: { project: source_project, package: package, oproject: source_project, opackage: package }
       end
 
@@ -533,6 +534,7 @@ RSpec.describe Webui::PackageController, vcr: true do
 
     context 'when an empty revision is provided' do
       before do
+        login user
         get :rdiff, params: { project: source_project, package: package, rev: '' }
       end
 
@@ -886,6 +888,7 @@ RSpec.describe Webui::PackageController, vcr: true do
       let(:other_user) { create(:confirmed_user, login: 'bar') }
       let(:project) { create(:project, name: 'foo_project') }
       let!(:package_with_maintainer) { create(:package_with_maintainer, maintainer: user, project: project) }
+
       before do
         login other_user
         post :trigger_rebuild, params: { project: project, package: package_with_maintainer }

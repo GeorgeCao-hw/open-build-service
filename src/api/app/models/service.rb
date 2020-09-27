@@ -19,8 +19,8 @@ class Service
   def self.valid_name?(name)
     return false unless name.is_a?(String)
     return false if name.length > 200 || name.blank?
-    return false if name =~ %r{^[_.]}
-    return false if name =~ %r{::}
+    return false if name =~ /^[_.]/
+    return false if name =~ /::/
     return true if name =~ /\A\w[-+\w.:]*\z/
 
     false
@@ -45,7 +45,7 @@ class Service
 
     begin
       uri = URI.parse(url)
-    rescue
+    rescue StandardError
       return false
     end
 
@@ -132,6 +132,6 @@ class Service
     addService('recompress', [{ name: 'compression', value: 'xz' }, { name: 'file', value: '*.tar' }], 'buildtime')
     addService('set_version', [], 'buildtime')
 
-    return true
+    true
   end
 end

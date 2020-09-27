@@ -3,6 +3,8 @@
 require 'fileutils'
 require 'yaml'
 
+ENABLED_FEATURE_FLAGS = [:responsive_ux, :notifications_redesign].freeze
+
 namespace :dev do
   task :prepare do
     puts 'Setting up the database configuration...'
@@ -31,8 +33,7 @@ namespace :dev do
     puts 'Creating the database...'
     begin
       Rake::Task['db:version'].invoke
-    rescue
-      Rake::Task['db:create'].invoke
+    rescue StandardError
       Rake::Task['db:setup'].invoke
       if args.old_test_suite
         puts 'Old test suite. Loading fixtures...'
@@ -55,8 +56,10 @@ namespace :dev do
       puts 'Configure default signing'
       Rake::Task['assets:clobber'].invoke
       ::Configuration.update(enforce_project_keys: true)
-      # we enable responsive_ux as default
-      Flipper[:responsive_ux].enable
+      # Enable all the feature flags for all logged-in and not-logged-in users in development env.
+      ENABLED_FEATURE_FLAGS.each do |feature_flag|
+        Flipper[feature_flag].enable
+      end
     end
   end
 
@@ -68,12 +71,6 @@ namespace :dev do
   end
 
   namespace :lint do
-    task :db do
-      desc 'Verify DB structure'
-      Rake::Task['db:structure:verify'].invoke
-      Rake::Task['db:structure:verify_no_bigint'].invoke
-    end
-
     namespace :rubocop do
       desc 'Run the ruby linter in rails and in root'
       task all: [:root, :rails] do
@@ -127,7 +124,7 @@ namespace :dev do
     end
   end
 
-  namespace :ahm do
+  namespace :sre do
     desc 'Configure the rails app to publish application health monitoring stats'
     task :configure do
       unless Rails.env.development?
@@ -138,6 +135,7 @@ namespace :dev do
 
       copy_example_file('config/options.yml')
       options_yml = YAML.load_file('config/options.yml') || {}
+      options_yml['development']['influxdb_hosts'] = ['influx']
       options_yml['development']['amqp_namespace'] = 'opensuse.obs'
       options_yml['development']['amqp_options'] = { host: 'rabbit', port: '5672', user: 'guest', pass: 'guest', vhost: '/' }
       options_yml['development']['amqp_exchange_name'] = 'pubsub'
@@ -237,10 +235,14 @@ namespace :dev do
         )
         # Will create a notification (RequestStatechange event) for this request change.
         request2.change_state(newstate: ['accepted', 'declined'].sample, force: true, user: requestor.login, comment: 'Declined by requestor')
+
+        # Process notifications immediately to see them in the web UI
+        SendEventEmailsJob.new.perform_now
       end
     end
   end
 
+  # This is automatically run in Review App or manually in development env.
   namespace :development_testdata do
     task create: :environment do
       unless Rails.env.development?
@@ -255,12 +257,12 @@ namespace :dev do
       include ActiveSupport::Testing::TimeHelpers
 
       Rails.cache.clear
-      Rake::Task['db:drop'].invoke
-      Rake::Task['db:create'].invoke
-      Rake::Task['db:setup'].invoke
+      Rake::Task['db:reset'].invoke
 
-      # enable responsive_ux as default
-      Flipper[:responsive_ux].enable
+      # Enable all the feature flags for all logged-in and not-logged-in users in development env.
+      ENABLED_FEATURE_FLAGS.each do |feature_flag|
+        Flipper[feature_flag].enable
+      end
 
       iggy = create(:confirmed_user, login: 'Iggy')
       admin = User.where(login: 'Admin').first
@@ -387,6 +389,9 @@ namespace :dev do
 
       # Trigger package builds for home:admin
       home_admin.store
+
+      # Create notifications by running the `dev:notifications:data` task two times
+      Rake::Task['dev:notifications:data'].invoke(2)
     end
   end
 end

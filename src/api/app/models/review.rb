@@ -58,6 +58,7 @@ class Review < ApplicationRecord
   scope :bs_request_ids_of_involved_users, ->(user_ids) { where(user_id: user_ids).select(:bs_request_id) }
 
   scope :declined, -> { where(state: :declined) }
+  scope :in_state_new, -> { where(state: :new) }
 
   before_validation(on: :create) do
     self.state = :new if self[:state].nil?
@@ -65,6 +66,8 @@ class Review < ApplicationRecord
 
   before_validation :set_reviewable_association
   after_commit :update_cache
+
+  delegate :number, to: :bs_request
 
   def review_assignment
     errors.add(:unknown, 'no reviewer defined') unless by_user || by_group || by_project
@@ -187,7 +190,7 @@ class Review < ApplicationRecord
 
     relationships = obj.relationships
     roles = relationships.where(role: Role.hashed['maintainer'])
-    User.where(id: roles.users.pluck(:user_id)) + Group.where(id: roles.groups.pluck(:group_id))
+    User.where(id: roles.users.select(:user_id)) + Group.where(id: roles.groups.select(:group_id))
   end
 
   def users_and_groups_for_review
@@ -230,11 +233,12 @@ class Review < ApplicationRecord
     Event::ReviewChanged.create(bs_request.event_parameters)
 
     arguments = { review: self, comment: comment, user: User.session! }
-    if new_state == :accepted
+    case new_state
+    when :accepted
       HistoryElement::ReviewAccepted.create(arguments)
-    elsif new_state == :declined
+    when :declined
       HistoryElement::ReviewDeclined.create(arguments)
-    elsif new_state == :new
+    else
       HistoryElement::ReviewReopened.create(arguments)
     end
     true
@@ -250,7 +254,7 @@ class Review < ApplicationRecord
 
   def event_parameters(params = {})
     params = params.merge(_get_attributes)
-    params[:id] = id
+    params[:id] = bs_request.id
     params[:comment] = reason
     params[:reviewers] = map_objects_to_ids(users_and_groups_for_review)
     params[:when] = updated_at.strftime('%Y-%m-%dT%H:%M:%S')
@@ -261,6 +265,13 @@ class Review < ApplicationRecord
     params = event_parameters(params)
 
     Event::ReviewWanted.create(params)
+  end
+
+  def reviewed_by
+    return User.find_by(login: by_user) if by_user
+    return Group.find_by(title: by_group) if by_group
+    return Package.find_by_project_and_name(by_project, by_package) if by_package
+    return Project.find_by(name: by_project) if by_project
   end
 
   private

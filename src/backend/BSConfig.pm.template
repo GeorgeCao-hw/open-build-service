@@ -175,6 +175,8 @@ our $relsync_pool = {
 #our $sourcepublish_sync = 'rsync://127.0.0.1/sources';
 # optional filter to publish only some areas
 #our $sourcepublish_filter = [ "openSUSE:.*", "SUSE:.*" ];
+# optional filter to blocklist specific package names independend of the project
+#our $sourcepublish_blocklist = [ "flash-player", "binary-only-app" ];
 
 # Define your own global Macros
 #my $macro_packager = '<rpm@example.com>';
@@ -187,9 +189,10 @@ our $relsync_pool = {
 #our $sign = '/usr/bin/sign';
 #Extend sign call with project name as argument "--project $NAME"
 #our $sign_project = 1;
-#Global sign key 
+#Global sign key / cert
 #our $keyfile = '/srv/obs/openSUSE-Build-Service.asc';
 #our $gpg_standard_key = "/etc/obs-default-gpg.asc";
+#our $certfile = '/srv/obs/openSUSE-Build-Service.cert'
 
 # Use a special local arch for product building
 # our $localarch = "x86_64";
@@ -282,11 +285,12 @@ our $container_registries = {
 };
 
 our $publish_containers = [
-#   # key:   regex to match projid
+#   # key:   regex to match projid or projid/repoid
 #   # value: ArrayRef with identifiers for registries configured in $container_registries
-#   'SUSE:.*'        => [ 'registry.example.com', 'hub.docker.com' ],
-#   '.*:branches:.*' => [ 'staging-registry.example.com' ],
-   '.*'             => ['local'],
+#   'SUSE:.*/containers' => [ 'myregistry.example.com', 'local' ],
+#   'SUSE:'              => [ 'registry.example.com', 'hub.docker.com' ],
+#   '.*:branches:'       => [ 'staging-registry.example.com' ],
+   '.*'                 => ['local'],
 ];
 
 # enable this to announce the X-Registry-Supports-Signatures extension
@@ -306,5 +310,14 @@ our $local_registry_signatures_extension = 1;
 
 # public cloud uploader configuration
 # our $cloudupload_pubkey = "/etc/obs/cloudupload/_pubkey"; # default setting
+
+# user/password to be used by services which needs to authenticate at
+# OBS (e.g. kiwi_import)
+
+# our $obs_service_user = "";
+# our $obs_service_pass = "";
+
+# network name required for services using a local proxy/cache like gemianbox
+# our $obs_service_network = "obs_services";
 
 1;

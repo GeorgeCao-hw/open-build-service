@@ -42,7 +42,7 @@ my $eventdir = "$BSConfig::bsdir/events";
 my $srcrep = "$BSConfig::bsdir/sources";
 my $uploaddir = "$srcrep/:upload";
 
-my $rsyncserver = $BSConfig::sourcepublish_sync || $BSConfig::sourcepublish_sync;
+my $rsyncserver = $BSConfig::sourcepublish_sync;
 
 my $maxchild = 1;
 $maxchild = $BSConfig::sourcepublish_maxchild if defined $BSConfig::sourcepublish_maxchild;
@@ -159,7 +159,8 @@ sub syncsource {
 
   my @rsync_extra_options;
   @rsync_extra_options = split(' ', $BSConfig::rsync_extra_options) if $BSConfig::rsync_extra_options;
-  qsystem('echo', "$projid/$packid/$srcmd5\0", 'rsync', '-ar0', @rsync_extra_options, '--fuzzy', '--timeout', '7200', '--files-from=-', $dir, $rsyncserver) && die("    rsync failed at ".localtime(time).": $?\n");
+  # we can trust our sym links...
+  qsystem('echo', "$projid/$packid/$srcmd5\0", 'rsync', '-ar0', '--copy-unsafe-links', '--no-munge-links', @rsync_extra_options, '--fuzzy', '--timeout', '7200', '--files-from=-', $dir, $rsyncserver) && die("    rsync failed at ".localtime(time).": $?\n");
 
 }
 
@@ -167,13 +168,8 @@ sub sourcepublish {
   my ($projid, $packid, $srcmd5, $included) = @_;
 
   return unless $BSConfig::sourcepublish_sync && $BSConfig::sourcepublish_sync =~ /^rsync:\//;
-  if ($BSConfig::sourcepublish_filter) {
-    my $match;
-    for my $filter (@{$BSConfig::sourcepublish_filter||[]}) {
-      $match = 1 if $projid =~ /^$filter/;
-    }
-    return unless $match;
-  }
+  # Filtering by $BSConfig::sourcepublish_filter happens in bs_publish since
+  # it must happend by released project name and not build project.
 
   BSUtil::printlog("source publish event for $projid/$packid $srcmd5");
 

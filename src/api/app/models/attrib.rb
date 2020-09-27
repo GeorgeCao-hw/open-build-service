@@ -18,17 +18,6 @@ class Attrib < ApplicationRecord
   accepts_nested_attributes_for :values, allow_destroy: true
   accepts_nested_attributes_for :issues, allow_destroy: true
 
-  #### Callbacks macros: before_save, after_save, etc.
-  after_save ThinkingSphinx::RealTime.callback_for(
-    :package, [:package]
-  ), if: -> { package_id_previously_changed? }
-
-  after_save ThinkingSphinx::RealTime.callback_for(
-    :project, [:project]
-  ), if: -> { project_id_previously_changed? }
-
-  #### Scopes (first the default_scope macro if is used)
-
   #### Validations macros
   validates_associated :values
   validates_associated :issues
@@ -42,6 +31,7 @@ class Attrib < ApplicationRecord
            :validate_issues,
            :validate_allowed_values_for_attrib_type
 
+  after_save :populate_to_sphinx
   after_commit :write_container_attributes, on: [:create, :destroy, :update]
 
   #### Class methods using self. (public and then private)
@@ -83,7 +73,7 @@ class Attrib < ApplicationRecord
 
   def values_editable?
     !attrib_type.value_count || # If unlimited values
-      (attrib_type.value_count && attrib_type.value_count > 0) || # If value_count > 0
+      (attrib_type.value_count && attrib_type.value_count.positive?) || # If value_count.positive?
       attrib_type.issue_list # If issue_list true
   end
 
@@ -148,6 +138,18 @@ class Attrib < ApplicationRecord
 
   def write_container_attributes
     container.write_attributes if container && !container.destroyed?
+  end
+
+  def populate_to_sphinx
+    return unless package_id_previously_changed? || project_id_previously_changed?
+
+    package_id_previously_changed? ? define_sphinx_callback(:package, [:package]) : define_sphinx_callback(:project, [:project])
+  end
+
+  def define_sphinx_callback(reference, path = [])
+    ThinkingSphinx::RealTime::Callbacks::RealTimeCallbacks.new(
+      reference, path
+    ).after_save(self)
   end
 end
 

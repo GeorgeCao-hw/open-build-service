@@ -2,7 +2,7 @@ module OwnerSearch
   class Assignee < Base
     def for(search_string)
       @match_all = limit.zero?
-      @deepest = (limit < 0)
+      @deepest = limit.negative?
 
       @instances_without_definition = []
       @maintainers = []
@@ -54,11 +54,11 @@ module OwnerSearch
 
     def extract_owner(pkg)
       # optional check for devel package instance first
-      if @devel_disabled
-        owner = nil
-      else
-        owner = extract_maintainer(pkg.resolve_devel_package)
-      end
+      owner = if @devel_disabled
+                nil
+              else
+                extract_maintainer(pkg.resolve_devel_package)
+              end
       owner || extract_maintainer(pkg)
     end
 
@@ -94,6 +94,7 @@ module OwnerSearch
 
       package_name = b['package']
       package_name.gsub!(/\.[^.]*$/, '') if prj.is_maintenance_release?
+      package_name = Package.striping_multibuild_suffix(package_name)
       pkg = prj.packages.find_by_name(package_name)
 
       return false if pkg.nil? || pkg.is_patchinfo?

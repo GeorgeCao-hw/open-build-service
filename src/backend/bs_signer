@@ -35,6 +35,7 @@ use Digest::MD5 ();
 use XML::Structured ':bytes';
 use Build;
 use Storable;
+use JSON::XS ();
 
 use BSConfiguration;
 use BSRPC ':https';
@@ -189,7 +190,8 @@ sub signisofiles {
 	writeblk($fd, $e->[1], $sig . ("\0" x (2048 - length($sig))));
 	my $dirblk = readblk($fd, $e->[3]);
 	# patch in new content len
-	substr($dirblk, $e->[4] + 10, 4) = pack('V', length($sig));
+	substr($dirblk, $e->[4] + 10, 4) = pack('V', length($sig)); # little endian
+	substr($dirblk, $e->[4] + 14, 4) = pack('N', length($sig)); # big endian
 	writeblk($fd, $e->[3], $dirblk);
 	$signed++;
       }
@@ -203,7 +205,8 @@ sub signisofiles {
 	writeblk($fd, $e->[1], $pubkey . ("\0" x (8192 - length($pubkey))));
 	my $dirblk = readblk($fd, $e->[3]);
 	# patch in new content len
-	substr($dirblk, $e->[4] + 10, 4) = pack('V', length($pubkey));
+	substr($dirblk, $e->[4] + 10, 4) = pack('V', length($pubkey)); # little endian
+	substr($dirblk, $e->[4] + 14, 4) = pack('N', length($pubkey)); # big endian
 	writeblk($fd, $e->[3], $dirblk);
 	$signed++;
       }
@@ -365,6 +368,39 @@ sub signappx {
   die($@) if $@;
 }
 
+sub signhelm {
+  my ($signfile, $jobdir, @signargs) = @_;
+  my $chart = $signfile;
+  $chart =~ s/.*\///;
+  return unless $chart =~ s/\.helminfo$/\.tgz/;
+  return unless -s "$jobdir/$chart";
+  # read helminfo
+  my $helminfo_json;
+  my $helminfo;
+  return unless -e $signfile && -s _ < 1000000;
+  $helminfo_json = readstr($signfile);
+  eval { $helminfo = JSON::XS::decode_json($helminfo_json) };
+  return unless $helminfo && ref($helminfo) eq 'HASH';
+  my $config_yaml = $helminfo->{'config_yaml'};
+  my $chart_sha256 = $helminfo->{'chart_sha256'};
+  return unless $config_yaml && ref($config_yaml) eq '';
+  return unless $chart_sha256 && ref($chart_sha256) eq '' && $chart_sha256 =~ /^[0-9a-f]{64}$/s;
+  # escape filename
+  if ($chart =~ /[\x00-\x1f\x7f-\x9f\']/) {
+    $chart =~ s/\\/\\\\/g;
+    $chart =~ s/\"/\\\"/g;
+    $chart =~ s/[\x00-\x1f\x7f-\x9f]/'\x'.sprintf("%X",ord($1))/ge;
+    $chart = "\"$chart\"";
+  } elsif ($chart =~ /(?:^[~!@#%&*|>?:,'"`{}\[\]]|^-+$|\s|:\z)/) {
+    $chart = "'$chart'";
+  }
+  # generate provenance file and clearsign it
+  my $prov = "$config_yaml\n...\nfiles:\n  $chart: sha256:$chart_sha256\n";
+  splice(@signargs, $BSConfig::sign_project ? 2 : 0, 0, '--signtype', 'helm') if $BSConfig::sign_type;
+  my $prov_signed = BSUtil::xsystem($prov, $BSConfig::sign, @signargs, '-c');
+  writestr("$jobdir/$chart.prov", undef, $prov_signed);
+}
+
 sub fixup_sha256_checksum {
   my ($jobdir, $shafile, $isofile) = @_;
   return if ((-s "$jobdir/$shafile") || 0) > 65536;
@@ -443,6 +479,41 @@ sub getsignkey {
   return ($algo, $signkey, $pubkey, $cert);
 }
 
+sub getsigdata {
+  my ($rpm) = @_;
+  my $sigdata;
+  eval {
+    my %res = Build::Rpm::rpmq($rpm, 'SIGTAG_GPG', 'SIGTAG_PGP');
+    my $sig = $res{'SIGTAG_PGP'} || $res{'SIGTAG_GPG'};
+    $sig = $sig->[0] if $sig;
+    $sigdata = BSPGP::pk2sigdata($sig) if $sig;
+  };
+  warn("getsigdata $rpm: $@") if $@;
+  return $sigdata ? $sigdata : {};
+}
+
+sub rpmdelsign {
+  my ($rpm) = @_;
+  # rpm --delsign clobbers the lead data, so copy it over
+  my ($rfd, $wfd);
+  if (!open($rfd, '<', $rpm)) {
+    warn("rpmdelsign $rpm: $!\n");
+    return;
+  }
+  my $lead = '';
+  sysread($rfd, $lead, 96);
+  close($rfd);
+  system('rpm', '--delsign', $rpm) && warn("delsign $rpm failed: $?\n");
+  if (length($lead) == 96) {
+    if (!open($wfd, '+<', $rpm)) {
+      warn("rpmdelsign $rpm: $!\n");
+      return;
+    }
+    syswrite($wfd, $lead, 96);
+    close($wfd);
+  }
+}
+
 sub signjob {
   my ($job, $arch) = @_;
 
@@ -468,7 +539,7 @@ sub signjob {
   my $info = readxml("$jobsdir/$arch/$job", $BSXML::buildinfo);
   my $projid = $info->{'project'};
   my @files = sort(ls($jobdir));
-  my @signfiles = grep {/\.(?:d?rpm|sha256|iso|pkg\.tar\.gz|pkg\.tar\.xz|rsasign|AppImage|appx)$/} @files;
+  my @signfiles = grep {/\.(?:d?rpm|sha256|iso|pkg\.tar\.gz|pkg\.tar\.xz|rsasign|AppImage|appx|helminfo)$/} @files;
   my $needpubkey;
   if (grep {$_ eq '.kiwitree_tosign'} @files) {
     for my $f (split("\n", readstr("$jobdir/.kiwitree_tosign"))) {
@@ -516,6 +587,10 @@ sub signjob {
 
     eval {
       for my $signfile (@signfiles) {
+	if ($signfile =~ /\.helminfo$/) {
+	  signhelm("$jobdir/$signfile", $jobdir, @signargs);
+	  next;
+	}
 	if ($signfile =~ /\.appx$/) {
 	  signappx("$jobdir/$signfile", $jobdir, $projid, $signkey, $cert, @signargs);
 	  next;
@@ -528,22 +603,21 @@ sub signjob {
 	  rsasign("$jobdir/$signfile", $jobstatus, @signargs) if $followupfile;
 	  next;
 	}
-	my $signtime;
+	my $signfilefinal;
+	my ($signtime, $signissuer);
 	if ($info->{'file'} eq '_aggregate' && ($signfile =~ /\.d?rpm$/)) {
 	  # newer rpm versions sometimes do in-place signature replacement,
 	  # so create a copy first
 	  # (we should add a delsign option to our sign utility...)
-	  BSUtil::cp("$jobdir/$signfile", "$jobdir/.$signfile", "$jobdir/$signfile");
+	  BSUtil::cp("$jobdir/$signfile", "$jobdir/.$signfile");
+	  $signfilefinal = $signfile;
+	  $signfile = ".$signfile";
 	  # special aggregate handling: remove old sigs
 	  # but get old sig time first
-	  eval {
-	    my %res = Build::Rpm::rpmq("$jobdir/$signfile", 'SIGTAG_GPG', 'SIGTAG_PGP');
-	    my $sig = $res{'SIGTAG_PGP'} || $res{'SIGTAG_GPG'};
-	    $sig = $sig->[0] if $sig;
-	    $signtime = BSPGP::pk2signtime($sig) if $sig;
-	  };
-	  warn("get signtime: $@") if $@;
-	  system('rpm', '--delsign', "$jobdir/$signfile") && warn("delsign $jobdir/$signfile failed: $?\n");
+	  my $sigdata = getsigdata("$jobdir/$signfile");
+	  $signtime = $sigdata->{'signtime'};
+	  $signissuer = $sigdata->{'issuer'};
+	  rpmdelsign("$jobdir/$signfile");
 	  print "using signtime $signtime\n" if $signtime;
 	}
 	my @signmode;
@@ -580,7 +654,21 @@ sub signjob {
 	      $jobstatus->{'result'} = 'rebuild';
 	    }
 	  }
+	  unlink("$jobdir/$signfile") if $signfilefinal;	# delete tmp file
 	  die("sign $jobdir/$signfile failed\n");
+	}
+	if ($signfilefinal) {
+	  # check if the signed rpm has the same issuer
+	  my $sigdata = getsigdata("$jobdir/$signfile");
+	  if ($sigdata->{'issuer'} && $signissuer && $sigdata->{'issuer'} eq $signissuer) {
+	    # old rpm was already signed with the same issuer, reuse
+	    print "same issuer, reusing old rpm\n";
+	    unlink("$jobdir/$signfile");
+	  } else {
+	    rename("$jobdir/$signfile", "$jobdir/$signfilefinal");
+	  }
+	  $signfile = $signfilefinal;
+	  undef $signfilefinal;
 	}
 	if ($signfile =~ /\.AppImage$/ && -e "$jobdir/$signfile.zsync") {
 	  print("regenerating zsync file\n");

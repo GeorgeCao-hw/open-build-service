@@ -40,7 +40,7 @@ aliases:
 
   - &create_test_db
     name: Create database
-    command: cd src/api; bundle exec rake db:create db:setup RAILS_ENV=test
+    command: cd src/api; bundle exec rake db:setup RAILS_ENV=test
 
   - &bootstrap_old_test_suite
     name: Setup application
@@ -82,6 +82,9 @@ jobs:
             - src/api/tmp/rubocop_cache_root_dir
             - src/api/tmp/rubocop_cache_rails_dir
       - run: rm -rf src/api/tmp/rubocop*
+      - run:
+          name: Run brakeman
+          command: sudo gem install --no-format-executable brakeman; brakeman --rails6 -p src/api
       - run:
           name: Setup application
           command: cd src/api; bundle exec rake dev:prepare assets:precompile RAILS_ENV=test FORCE_EXAMPLE_FILES=1
@@ -158,7 +161,6 @@ jobs:
             cd src/api
             case $CIRCLE_NODE_INDEX in
               0)
-                bundle exec rake dev:lint:db RAILS_ENV=test
                 bundle exec rake test:api:group1
                 ;;
               1)
@@ -226,24 +228,6 @@ jobs:
           path: src/api/coverage_results
           destination: raw_coverage
 
-  brakeman:
-    docker:
-      - <<: *frontend_base
-
-    steps:
-      - attach_workspace:
-         at: .
-      - run:
-          name: Patch brakeman in
-          command: |
-            sed -i -e 's,# BRAKEMAN,gem "brakeman",' src/api/Gemfile
-      - run: *install_dependencies
-      - run:
-          name: Run brakeman
-          command: |
-            cd src/api
-            brakeman .
-
   feature:
     parallelism: 3
     docker:
@@ -310,15 +294,14 @@ workflows:
             - checkout_code
       - spider:
           requires:
-            - checkout_code
+            - rspec
+            - minitest
+            - feature
       - coverage:
           requires:
             - rspec
             - minitest
             - feature
-      - brakeman:
-          requires:
-            - checkout_code
       - feature:
           requires:
             - checkout_code

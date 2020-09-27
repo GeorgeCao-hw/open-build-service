@@ -1,5 +1,6 @@
 # rubocop:disable Metrics/ClassLength
 class Project < ApplicationRecord
+  include AppendSphinxCallbacks
   include FlagHelper
   include Flag::Validations
   include CanRenderModel
@@ -7,7 +8,6 @@ class Project < ApplicationRecord
   include HasRatings
   include HasAttributes
   include MaintenanceHelper
-  include PopulateSphinx
   include ProjectSphinx
   include Project::Errors
   include StagingProject
@@ -15,14 +15,13 @@ class Project < ApplicationRecord
   TYPES = ['standard', 'maintenance', 'maintenance_incident',
            'maintenance_release'].freeze
 
+  after_initialize :init
   before_destroy :cleanup_before_destroy
   after_destroy_commit :delete_on_backend
 
   after_save :discard_cache
-  after_save :populate_sphinx, if: -> { name_previously_changed? || title_previously_changed? || description_previously_changed? }
   after_rollback :reset_cache
   after_rollback :discard_cache
-  after_initialize :init
 
   serialize :required_checks, Array
   attr_accessor :commit_opts, :commit_user
@@ -94,7 +93,7 @@ class Project < ApplicationRecord
   has_many :notified_projects, dependent: :destroy
   has_many :notifications, through: :notified_projects
 
-  default_scope { where('projects.id not in (?)', Relationship.forbidden_project_ids) }
+  default_scope { where.not('projects.id' => Relationship.forbidden_project_ids) }
 
   scope :maintenance, -> { where("kind = 'maintenance'") }
   scope :not_maintenance_incident, -> { where("kind <> 'maintenance_incident'") }
@@ -140,8 +139,8 @@ class Project < ApplicationRecord
     def valid_name?(name)
       return false unless name.is_a?(String)
       return false if name == '0'
-      return false if name =~ /:[:\._]/
-      return false if name =~ /\A[:\._]/
+      return false if name =~ /:[:._]/
+      return false if name =~ /\A[:._]/
       return false if name.end_with?(':')
       return true  if name =~ /\A[-+\w.:]{1,200}\z/
 
@@ -326,7 +325,7 @@ class Project < ApplicationRecord
           return project, remote_project
         end
       end
-      return
+      nil
     end
 
     # Returns a list of pairs (full name, short name) for each parent
@@ -338,7 +337,7 @@ class Project < ApplicationRecord
       (1..atoms.length).each do |i|
         p = atoms.slice(0, i).join(':')
         r = atoms.slice(unused, i - unused).join(':')
-        if Project.where(name: p).exists? # ignore remote projects here
+        if Project.exists?(name: p) # ignore remote projects here
           projects << [p, r]
           unused = i
         end
@@ -367,9 +366,10 @@ class Project < ApplicationRecord
     end
 
     def has_dod_elements?(request_data)
-      if request_data.is_a?(Array)
+      case request_data
+      when Array
         request_data.any? { |r| r['download'] }
-      elsif request_data.is_a?(Hash)
+      when Hash
         request_data['download'].present?
       end
     end
@@ -379,9 +379,7 @@ class Project < ApplicationRecord
         maintenance.elements('maintains') do |maintains|
           target_project_name = maintains.value('project')
           target_project = Project.get_by_name(target_project_name)
-          unless target_project.class == Project && User.possibly_nobody.can_modify?(target_project)
-            return { error: "No write access to maintained project #{target_project_name}" }
-          end
+          return { error: "No write access to maintained project #{target_project_name}" } unless target_project.class == Project && User.possibly_nobody.can_modify?(target_project)
         end
       end
       {}
@@ -473,9 +471,7 @@ class Project < ApplicationRecord
           # but never remove the special repository named "deleted"
           unless repo == deleted_repository
             # permission check
-            unless User.possibly_nobody.can_modify?(project)
-              return { error: "No permission to remove a repository in project '#{project.name}'" }
-            end
+            return { error: "No permission to remove a repository in project '#{project.name}'" } unless User.possibly_nobody.can_modify?(project)
           end
         end
 
@@ -668,6 +664,7 @@ class Project < ApplicationRecord
     raise WritePermissionError, "No permission to modify project '#{name}' for user '#{User.possibly_nobody.login}'"
   end
 
+  # FIXME: Rely on pundit policies instead of this
   def can_be_modified_by?(user, ignore_lock = nil)
     return user.can_create_project?(name) if new_record?
 
@@ -675,7 +672,7 @@ class Project < ApplicationRecord
   end
 
   def is_locked?
-    @is_locked ||= flags.where(flag: 'lock', status: 'enable').exists?
+    @is_locked ||= flags.exists?(flag: 'lock', status: 'enable')
   end
 
   def is_unreleased?
@@ -785,9 +782,7 @@ class Project < ApplicationRecord
     # expire cache
     reset_cache
 
-    unless @commit_opts[:no_backend_write] || @commit_opts[:login] || @commit_user
-      raise ArgumentError, 'no commit_user set'
-    end
+    raise ArgumentError, 'no commit_user set' unless @commit_opts[:no_backend_write] || @commit_opts[:login] || @commit_user
 
     if CONFIG['global_write_through'] && !@commit_opts[:no_backend_write]
       login = @commit_opts[:login] || @commit_user.login
@@ -908,16 +903,14 @@ class Project < ApplicationRecord
 
     # search via all linked projects
     linking_to.each do |lp|
-      if self == lp.linked_db_project
-        raise CycleError, 'project links against itself, this is not allowed'
-      end
+      raise CycleError, 'project links against itself, this is not allowed' if self == lp.linked_db_project
 
-      if lp.linked_db_project.nil?
-        # We can't get a package object from a remote instance ... how shall we handle this ?
-        pkg = nil
-      else
-        pkg = lp.linked_db_project.find_package(package_name, check_update_project, processed)
-      end
+      pkg = if lp.linked_db_project.nil?
+              # We can't get a package object from a remote instance ... how shall we handle this ?
+              nil
+            else
+              lp.linked_db_project.find_package(package_name, check_update_project, processed)
+            end
       unless pkg.nil?
         return pkg if Package.check_access?(pkg)
       end
@@ -925,7 +918,7 @@ class Project < ApplicationRecord
 
     # no package found
     processed.delete(self)
-    return
+    nil
   end
 
   def expand_all_repositories
@@ -1025,9 +1018,7 @@ class Project < ApplicationRecord
 
     # add repository targets
     add_target_repos.each do |repo|
-      unless trepo.release_targets.where(target_repository: repo).exists?
-        trepo.release_targets.create(target_repository: repo, trigger: trigger)
-      end
+      trepo.release_targets.create(target_repository: repo, trigger: trigger) unless trepo.release_targets.exists?(target_repository: repo)
     end
   end
 
@@ -1056,7 +1047,7 @@ class Project < ApplicationRecord
       pkg_to_enable.enable_for_repository(repo_name) if pkg_to_enable
       next if repositories.find_by_name(repo_name)
 
-      if repositories.where(name: repo_name).exists?
+      if repositories.exists?(name: repo_name)
         skip_repos.push(repo_name)
         next
       end
@@ -1173,7 +1164,7 @@ class Project < ApplicationRecord
           # of my repositories?
           repositories.joins(:path_elements).where('path_elements.repository_id = ?', ipe.link).find_each do |my_repo|
             next if my_repo == repo # do not add my self
-            next if repo.path_elements.where(link: my_repo).count > 0
+            next if repo.path_elements.where(link: my_repo).count.positive?
 
             elements = repo.path_elements.where(position: ipe.position)
             if elements.count.zero?
@@ -1208,7 +1199,7 @@ class Project < ApplicationRecord
       next if f.flag == 'publish' && disable_publish_for_branches
       # NOTE: it does not matter if that flag is set to enable or disable, so we do not check fro
       #       for same flag status here explizit
-      next if flags.where(flag: f.flag, architecture: f.architecture, repo: f.repo).exists?
+      next if flags.exists?(flag: f.flag, architecture: f.architecture, repo: f.repo)
 
       flags.create(status: f.status, flag: f.flag, architecture: f.architecture, repo: f.repo)
     end
@@ -1341,15 +1332,15 @@ class Project < ApplicationRecord
                          .with_types(:maintenance_incident)
                          .pluck(:number)
 
-    if is_maintenance?
-      maintenance_release = BsRequest.with_target_subprojects(name + ':%')
+    maintenance_release = if is_maintenance?
+                            BsRequest.with_target_subprojects(name + ':%')
                                      .or(BsRequest.with_source_subprojects(name + ':%'))
                                      .in_states(:new)
                                      .with_types(:maintenance_release)
                                      .pluck(:number)
-    else
-      maintenance_release = []
-    end
+                          else
+                            []
+                          end
 
     { reviews: reviews, targets: targets, incidents: incidents, maintenance_release: maintenance_release }
   end
@@ -1419,7 +1410,7 @@ class Project < ApplicationRecord
       end
     end
 
-    return unless repositories.count > 0
+    return unless repositories.count.positive?
 
     # ensure higher build numbers for re-release
     Backend::Api::Build::Project.wipe_binaries(name)
@@ -1489,7 +1480,7 @@ class Project < ApplicationRecord
   end
 
   def has_remote_repositories?
-    DownloadRepository.where(repository_id: repositories.select(:id)).exists?
+    DownloadRepository.exists?(repository_id: repositories.select(:id))
   end
 
   def to_s
@@ -1502,7 +1493,7 @@ class Project < ApplicationRecord
 
   def image_template?
     attribs.joins(attrib_type: :attrib_namespace)
-           .where(attrib_types: { name: 'ImageTemplates' }, attrib_namespaces: { name: 'OBS' }).exists?
+           .exists?(attrib_types: { name: 'ImageTemplates' }, attrib_namespaces: { name: 'OBS' })
   end
 
   def key_info

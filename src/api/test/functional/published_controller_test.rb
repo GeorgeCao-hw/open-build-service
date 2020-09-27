@@ -116,12 +116,13 @@ class PublishedControllerTest < ActionDispatch::IntegrationTest
         assert_equal 'myself', p['format']['rpm:provides']['rpm:entry'][0]['name']
         assert_equal 'something', p['format']['rpm:conflicts']['rpm:entry']['name']
         assert_equal 'old_crap', p['format']['rpm:obsoletes']['rpm:entry']['name']
-        if p['name'] == 'package'
+        case p['name']
+        when 'package'
           assert_equal 'package-1.0-1.src.rpm', p['format']['rpm:sourcerpm']
           assert_equal '2156', p['format']['rpm:header-range']['end']
           assert_equal 'package', p['format']['rpm:provides']['rpm:entry'][1]['name']
           assert_equal 'package(x86-32)', p['format']['rpm:provides']['rpm:entry'][2]['name']
-        elsif p['name'] == 'package_newweaktags'
+        when 'package_newweaktags'
           assert_equal 'package_newweaktags-1.0-1.src.rpm', p['format']['rpm:sourcerpm']
           assert_equal '2300', p['format']['rpm:header-range']['end']
           assert_equal 'package_newweaktags', p['format']['rpm:provides']['rpm:entry'][1]['name']
@@ -132,9 +133,7 @@ class PublishedControllerTest < ActionDispatch::IntegrationTest
         next unless File.exist?('/var/adm/fillup-templates') || File.exist?('/usr/share/fillup-templates/')
 
         # seems to be a SUSE system
-        if p['format']['rpm:suggests'].nil?
-          print 'createrepo seems not to create week dependencies, we need this at least on SUSE systems'
-        end
+        print 'createrepo seems not to create week dependencies, we need this at least on SUSE systems' if p['format']['rpm:suggests'].nil?
         assert_equal 'pure_optional', p['format']['rpm:suggests']['rpm:entry']['name']
         assert_equal 'would_be_nice', p['format']['rpm:recommends']['rpm:entry']['name']
         assert_equal 'other_package_likes_it', p['format']['rpm:supplements']['rpm:entry']['name']

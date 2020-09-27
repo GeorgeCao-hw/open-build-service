@@ -19,7 +19,7 @@ module Webui::RequestHelper
     'superseded' => 'fa-plus'
   }.freeze
 
-  AVAILABLE_TYPES = ['all', 'submit', 'delete', 'add_role', 'change_devel', 'maintenance_incident', 'maintenance_release'].freeze
+  AVAILABLE_TYPES = ['all', 'submit', 'delete', 'add_role', 'change_devel', 'maintenance_incident', 'maintenance_release', 'release'].freeze
   AVAILABLE_STATES = ['new or review', 'new', 'review', 'accepted', 'declined', 'revoked', 'superseded'].freeze
 
   def request_state_color(state)
@@ -79,6 +79,8 @@ module Webui::RequestHelper
       'incident'
     when :maintenance_release
       'release'
+    when :release
+      'release' # same as maintenance_release but the difference should matter in simplified view
     else
       type.to_s
     end
@@ -87,11 +89,11 @@ module Webui::RequestHelper
   def target_project_link(row)
     result = ''
     if row.target_project
-      if row.target_package && row.source_package != row.target_package
-        result = project_or_package_link(project: row.target_project, package: row.target_package, trim_to: 40, short: true)
-      else
-        result = project_or_package_link(project: row.target_project, trim_to: 40, short: true)
-      end
+      result = if row.target_package && row.source_package != row.target_package
+                 project_or_package_link(project: row.target_project, package: row.target_package, trim_to: 40, short: true)
+               else
+                 project_or_package_link(project: row.target_project, trim_to: 40, short: true)
+               end
     end
     result
   end
@@ -100,7 +102,7 @@ module Webui::RequestHelper
     return filename unless file_element['state'] == 'changed'
     return filename if file_element['old']['name'] == filename
 
-    return "#{file_element['old']['name']} -> #{filename}"
+    "#{file_element['old']['name']} -> #{filename}"
   end
 
   def diff_data(action_type, sourcediff)
@@ -149,6 +151,11 @@ module Webui::RequestHelper
         target_container: project_or_package_link(project: action[:tprj], package: action[:tpkg])
       }
     when :maintenance_release
+      'Maintenance release %{source_container} to %{target_container}' % {
+        source_container: project_or_package_link(source_project_hash),
+        target_container: project_or_package_link(project: action[:tprj], package: action[:tpkg])
+      }
+    when :release
       'Release %{source_container} to %{target_container}' % {
         source_container: project_or_package_link(source_project_hash),
         target_container: project_or_package_link(project: action[:tprj], package: action[:tpkg])

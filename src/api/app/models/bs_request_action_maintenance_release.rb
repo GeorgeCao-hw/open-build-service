@@ -87,7 +87,7 @@ class BsRequestActionMaintenanceRelease < BsRequestAction
     # run search
     open_ids = rel.select('bs_requests').pluck(:number)
     open_ids.delete(bs_request.number) if bs_request
-    if open_ids.count > 0
+    if open_ids.count.positive?
       msg = "The following open requests have the same target #{target_project} / #{tpkgprefix}: " + open_ids.join(', ')
       raise OpenReleaseRequests, msg
     end
@@ -96,7 +96,7 @@ class BsRequestActionMaintenanceRelease < BsRequestAction
     spkg = Package.find_by_project_and_name(source_project, source_package)
     return if spkg || !User.session!.can_modify?(spkg)
 
-    raise LackingReleaseMaintainership, 'Creating a release request action requires maintainership in source package'
+    raise LackingReleaseMaintainership, 'Creating a maintenance release request action requires maintainership in source package'
   end
 
   def set_acceptinfo(ai)
@@ -151,12 +151,8 @@ class BsRequestActionMaintenanceRelease < BsRequestAction
     # get sure that the releasetarget definition exists or we release without binaries
     prj = Project.get_by_name(source_project)
     prj.repositories.includes(:release_targets).find_each do |repo|
-      if repo.release_targets.empty?
-        raise RepositoryWithoutReleaseTarget, "Release target definition is missing in #{prj.name} / #{repo.name}"
-      end
-      if repo.architectures.empty?
-        raise RepositoryWithoutArchitecture, "Repository has no architecture #{prj.name} / #{repo.name}"
-      end
+      raise RepositoryWithoutReleaseTarget, "Release target definition is missing in #{prj.name} / #{repo.name}" if repo.release_targets.empty?
+      raise RepositoryWithoutArchitecture, "Repository has no architecture #{prj.name} / #{repo.name}" if repo.architectures.empty?
 
       repo.release_targets.each do |rt|
         unless repo.architectures.size == rt.target_repository.architectures.size

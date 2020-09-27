@@ -188,8 +188,8 @@ sub fetchdodbinary {
 
 sub readpackstatus {
   my ($prpa) = @_;
-  my $psf = readstr("$reporoot/$prpa/:packstatus.finished", 1);
-  my $ps = BSUtil::retrieve("$reporoot/$prpa/:packstatus", 1);
+  my $psf = BSStdServer::readstr_memoized("$reporoot/$prpa/:packstatus.finished", 1);
+  my $ps = BSStdServer::retrieve_memoized("$reporoot/$prpa/:packstatus", 1);
   if (!$ps) {
     # backward compat: try old xml format
     return undef unless -e "$reporoot/$prpa/:packstatus";
@@ -2126,6 +2126,7 @@ sub receivekiwitree {
       'timeout' => 600,
       'acceptsubdirs' => 1,
       'accept' => sub {$todo{$_[1]}},
+      'cpiopostfile' => sub {alarm(600)},
       'receiver' => \&BSHTTP::cpio_receiver,
     };
     my $res = BSRPC::rpc($param, undef, map {"file=$_"} sort keys %todo);
@@ -2410,8 +2411,7 @@ sub putjob {
 
   my $ev = {'type' => 'built', 'arch' => $arch, 'job' => $job};
 
-  if ($BSConfig::sign && (@{$kiwitree_tosign || []} || grep {$_->{'name'} =~ /\.(?:d?rpm|sha256|iso|pkg\.tar\.gz|pkg\.tar.xz|AppImage|deb|appx)$/} @$uploaded)) {
-    # write jobstatus and free lock
+  if ($BSConfig::sign && (@{$kiwitree_tosign || []} || grep {$_->{'name'} =~ /\.(?:d?rpm|sha256|iso|pkg\.tar\.gz|pkg\.tar.xz|AppImage|deb|appx|helminfo)$/} @$uploaded)) {
     if (@{$kiwitree_tosign || []}) {
       my $c = '';
       $c .= BSHTTP::urlencode($_)."\n" for @$kiwitree_tosign;
@@ -2420,26 +2420,20 @@ sub putjob {
       unlink("$dir/.kiwitree_tosign");
     }
     $jobstatus->{'code'} = 'signing';
-    writexml("$jobsdir/$arch/.$job:status", "$jobsdir/$arch/$job:status", $jobstatus, $BSXML::jobstatus);
-    updateredisjobstatus($arch, $job, $info, 'signing');
-    close F;
-
-    mkdir_p("$eventdir/signer");
-    writexml("$eventdir/signer/.finished:$arch:$job$$", "$eventdir/signer/finished:$arch:$job", $ev, $BSXML::event);
-    BSUtil::ping("$eventdir/signer/.ping");
   } else {
-    # write jobstatus and free lock
     $jobstatus->{'code'} = 'finished';
-    writexml("$jobsdir/$arch/.$job:status", "$jobsdir/$arch/$job:status", $jobstatus, $BSXML::jobstatus);
-    updateredisjobstatus($arch, $job, $info, 'finished');
-    close F;
-
-    dirty($projid, $repoid, $arch);
-    mkdir_p("$eventdir/$arch");
-    writexml("$eventdir/$arch/.finished:$job$$", "$eventdir/$arch/finished:$job", $ev, $BSXML::event);
-    BSUtil::ping("$eventdir/$arch/.ping");
   }
-
+  # write jobstatus and free lock
+  writexml("$jobsdir/$arch/.$job:status", "$jobsdir/$arch/$job:status", $jobstatus, $BSXML::jobstatus);
+  updateredisjobstatus($arch, $job, $info, $jobstatus->{'code'});
+  close F;
+  dirty($projid, $repoid, $arch) unless $jobstatus->{'code'} eq 'signing';
+  # send event to signer or scheduler
+  $arch = 'signer' if $jobstatus->{'code'} eq 'signing';
+  my $evname = $jobstatus->{'code'} eq 'signing' ? "finished:$arch:$job" : "finished:$job";
+  mkdir_p("$eventdir/$arch");
+  writexml("$eventdir/$arch/.$evname$$", "$eventdir/$arch/$evname", $ev, $BSXML::event);
+  BSUtil::ping("$eventdir/$arch/.ping");
   return $BSStdServer::return_ok;
 }
 
@@ -2514,7 +2508,8 @@ sub copybuild {
       # directories are stripped of the build/release number by default
       if (!defined($setrelease)) {
         $setrelease = '' if -d "$odir/$bin";
-        $setrelease = '' if $bin =~ /^(.*)\.report$/ && -d "$odir/$1";	# need to keep report in sync with dir
+        $setrelease = '' if $bin =~ /^(.*)\.report$/ && -d "$odir/$1";    # need to keep report in sync with dir
+        $setrelease = '' if $bin =~ /^(.*)\.milestone$/ && -d "$odir/$1"; # need to keep milestone as well
       }
       if (defined($setrelease)) {
 	$setrelease =~ s/^-?/-/; # "-" will drop the release tag
@@ -2522,10 +2517,22 @@ sub copybuild {
         # we must ensure to run only one of the following, because people
         # overwrite -BuildX.Y part with -BuildV.W (using not matching numbers)
         # but this must not lead to double matches
-        # kiwi product || appliance
-        $nbin =~ s/-([^-]+)(-Media\d?(?:\..*?)?)$/$setrelease$2/ ||
-           $nbin =~ s/-Build[\d.]+\./$setrelease./;
+
+        my $oldsetrelease;
+        $oldsetrelease = readstr("$odir/.setrelease") if -e "$odir/.setrelease";
+	if (defined($oldsetrelease)) {
+	  if ($oldsetrelease ne $oldsetrelease) {
+            # kiwi product || appliance
+            $nbin =~ s/(-\Q$oldsetrelease\E)(-Media\d?(?:\..*?)?)$/-$setrelease$2/ ||
+               $nbin =~ s/$oldsetrelease\./$setrelease./;
+          }
+        } else {
+          # kiwi product || appliance
+          $nbin =~ s/-([^-]+)(-Media\d?(?:\..*?)?)$/$setrelease$2/ ||
+             $nbin =~ s/-Build[\d.]+\./$setrelease./;
+        }
 	$nbin =~ s/-([^-.]+).([^.]*.rpm)$/$setrelease.$2/; # rpms
+        writestr("$dir/.setrelease", undef, $setrelease);
       }
       $renamed{$bin} = $nbin if $bin ne $nbin;
       if (-d "$odir/$bin") {
@@ -2699,9 +2706,11 @@ sub forwardevent {
     # those events stack - we must not overwrite them. randomize somewhat.
     $evname = "type:::$$-".Digest::MD5::md5_hex("$$/$evname".time());
   }
-  mkdir_p("$eventdir/$arch") if $arch;
   if ($arch) {
-    dirty($projid, $repoid, $arch) unless !defined($repoid) || $arch eq 'dispatch' || $arch eq 'publish';
+    mkdir_p("$eventdir/$arch");
+    if ($arch ne 'dispatch' && $arch ne 'publish') {
+      dirty($projid, $repoid, $arch) if defined($repoid) || $type eq 'project' || $type eq 'package';
+    }
     writexml("$eventdir/$arch/.$evname.$$", "$eventdir/$arch/$evname", $ev, $BSXML::event);
     BSUtil::ping("$eventdir/$arch/.ping");
   } else {
@@ -2718,7 +2727,7 @@ sub forwardevent {
     for my $a (@archs) {
       eval {
         mkdir_p("$eventdir/$a");
-        dirty($projid, $repoid, $a) if defined $repoid;
+        dirty($projid, $repoid, $a) if defined($repoid) || $type eq 'project' || $type eq 'package';
         writexml("$eventdir/$a/.$evname.$$", "$eventdir/$a/$evname", $ev, $BSXML::event);
         BSUtil::ping("$eventdir/$a/.ping");
       };
@@ -3303,10 +3312,7 @@ sub getbuildinfo_post {
     my $services = readxml($cgi->{'_servicefile'}, $BSXML::services);
     for my $service (@{$services->{'service'} || []}) {
        next unless $service->{'mode'} && $service->{'mode'} eq 'buildtime';
-       my $pkgname = "obs-service-$service->{'name'}";
-       # debian does not allow _ in package name
-       $pkgname =~ s/_/-/g if $bconf->{'binarytype'} eq 'deb';
-       push @{$info->{'dep'}}, $pkgname;
+       push @{$info->{'buildtimeservice'}}, $service->{'name'};
      }
   }
   $pdata->{'ldepfile'} = $cgi->{'_depfile'} if $cgi->{'_depfile'};
@@ -4121,6 +4127,10 @@ sub checkconstraints {
     $constraints = readxml("$uploaddir/$$", $BSXML::constraints);
     unlink("$uploaddir/$$");
   }
+  my $info;
+  $info->{'package'} = $packid;
+  $info->{'arch'} = $arch;
+  $constraints = BSDispatcher::Constraints::overwriteconstraints($info, $constraints) if $constraints->{'overwrite'};
   my $pconf = BSRPC::rpc("$BSConfig::srcserver/getconfig", undef, "project=$projid", "repository=$repoid");
   my $bconf = Build::read_config($arch, [ split("\n", $pconf)] );
   my @list = map { [ split(' ', $_) ] } @{$bconf->{'constraint'}};
@@ -4468,6 +4478,8 @@ my $conf = {
   'port' => $port,
   'proto' => $proto,
   'dispatches' => $dispatches,
+  'memoize' => "$eventdir/memoize",
+  'memoize_max_size' => 1024*1024, # 1MB in bytes
   'maxchild' => 20,
   'maxchild2' => 20,
   'slowrequestthr' => 10,

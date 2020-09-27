@@ -47,9 +47,7 @@ class AttributeController < ApplicationController
   def load_attribute
     @namespace = params[:namespace]
     @ans = AttribNamespace.find_by_name!(@namespace)
-    if params[:name].nil?
-      raise MissingParameterError, "parameter 'name' is missing"
-    end
+    raise MissingParameterError, "parameter 'name' is missing" if params[:name].nil?
 
     @name = params[:name]
     # find_by_name is something else (of course)
@@ -70,6 +68,6 @@ class AttributeController < ApplicationController
 
     render_error status: 400, errorcode: 'illegal_request',
                  message: "Illegal request: PUT/POST #{request.path}: path does not match content"
-    return
+    nil
   end
 end

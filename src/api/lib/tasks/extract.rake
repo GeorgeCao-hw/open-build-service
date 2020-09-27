@@ -7,7 +7,7 @@ def local_to_yaml(hash, file)
   keys.each_with_index do |k, index| # <-- here's my addition (the 'sort')
     v = hash[k]
     k = "record_#{index}" if k.is_a?(Integer)
-    file.write({ k => v }.to_yaml(SortKeys: true, ExplicitTypes: true).gsub(%r{^---\s*}, ''))
+    file.write({ k => v }.to_yaml(SortKeys: true, ExplicitTypes: true).gsub(/^---\s*/, ''))
   end
 end
 
@@ -41,7 +41,7 @@ namespace :db do
         oldhash ||= {}
       rescue Errno::ENOENT, TypeError
         oldhash = {}
-      rescue => e
+      rescue StandardError => e
         puts e.class
         raise e
       end
@@ -75,11 +75,11 @@ namespace :db do
         data.each do |record|
           record = force_hash(record)
           id = i.succ!
-          if classname
-            primary = classname.primary_key
-          else
-            primary = 'id'
-          end
+          primary = if classname
+                      classname.primary_key
+                    else
+                      'id'
+                    end
           id = Integer(record[primary]) if record.key?(primary)
           if record.key?('user_id')
             user = User.find(record.delete('user_id'))
@@ -120,18 +120,14 @@ namespace :db do
           end
           if record.key?('linked_db_project_id')
             pid = record.delete('linked_db_project_id')
-            if pid > 0
+            if pid.positive?
               p = Project.find(pid)
               record['linked_db_project'] = p.name.tr(':', '_')
             end
           end
           if table_name == 'taggings'
-            if record['taggable_type'] == 'Project'
-              record['taggable_id'] = ActiveRecord::FixtureSet.identify(Project.find(record['taggable_id']).name.tr(':', '_'))
-            end
-            if record['taggable_type'] == 'Package'
-              record['taggable_id'] = ActiveRecord::FixtureSet.identify(Package.find(record['taggable_id']).fixtures_name)
-            end
+            record['taggable_id'] = ActiveRecord::FixtureSet.identify(Project.find(record['taggable_id']).name.tr(':', '_')) if record['taggable_type'] == 'Project'
+            record['taggable_id'] = ActiveRecord::FixtureSet.identify(Package.find(record['taggable_id']).fixtures_name) if record['taggable_type'] == 'Package'
           end
 
           if table_name == 'distributions'
@@ -143,19 +139,13 @@ namespace :db do
           key = idtokey[id]
           key = nil if key == defaultkey
 
-          if table_name == 'roles_users'
-            defaultkey = "#{record['user']}_#{record['role']}"
-          end
-          if table_name == 'roles_static_permissions'
-            defaultkey = "#{record['role']}_#{record['static_permission']}"
-          end
-          if table_name == 'projects' || table_name == 'architectures'
+          defaultkey = "#{record['user']}_#{record['role']}" if table_name == 'roles_users'
+          defaultkey = "#{record['role']}_#{record['static_permission']}" if table_name == 'roles_static_permissions'
+          if ['projects', 'architectures'].include?(table_name)
             key = record['name'].tr(':', '_')
             record.delete(primary)
           end
-          if ['static_permissions', 'packages'].include?(table_name)
-            key = classname.find(record.delete(primary)).fixtures_name
-          end
+          key = classname.find(record.delete(primary)).fixtures_name if ['static_permissions', 'packages'].include?(table_name)
           defaultkey = record['package'] if table_name == 'backend_packages'
           if ['event_subscriptions', 'ratings', 'package_kinds', 'package_issues',
               'linked_db_projects', 'relationships', 'watched_projects', 'path_elements',

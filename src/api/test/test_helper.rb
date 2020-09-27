@@ -66,17 +66,13 @@ end
 
 def backend_config
   backend_dir_suffix = ''
-  if ENV['origin_RAILS_ENV'] == 'development'
-    backend_dir_suffix = '_development'
-  end
+  backend_dir_suffix = '_development' if ENV['origin_RAILS_ENV'] == 'development'
   "#{ENV['OBS_BACKEND_TEMP']}/config#{backend_dir_suffix}"
 end
 
 def backend_data
   backend_dir_suffix = ''
-  if ENV['origin_RAILS_ENV'] == 'development'
-    backend_dir_suffix = '_development'
-  end
+  backend_dir_suffix = '_development' if ENV['origin_RAILS_ENV'] == 'development'
   "#{ENV['OBS_BACKEND_TEMP']}/data#{backend_dir_suffix}"
 end
 
@@ -106,7 +102,7 @@ def inject_build_job(project, package, repo, arch, extrabinary = nil)
   f.close
   extrabinary = " -o -name #{extrabinary}" if extrabinary
   # rubocop:disable Layout/LineLength
-  system("cd #{Rails.root}/test/fixtures/backend/binary/; exec find . -name '*#{arch}.rpm' -o -name '*src.rpm' -o -name logfile -o -name _statistics #{extrabinary} | cpio -H newc -o 2>/dev/null | curl -s -X POST -T - 'http://localhost:3201/putjob?arch=#{arch}&code=succeeded&job=#{jobfile.gsub(/.*\//, '')}&jobid=#{jobid}' > /dev/null")
+  system("cd #{Rails.root}/test/fixtures/backend/binary/; exec find . -name '*#{arch}.rpm' -o -name '*src.rpm' -o -name logfile -o -name _statistics #{extrabinary} | cpio -H newc -o 2>/dev/null | curl -s -X POST -T - 'http://localhost:3201/putjob?arch=#{arch}&code=succeeded&job=#{jobfile.gsub(%r{.*/}, '')}&jobid=#{jobid}' > /dev/null")
   # rubocop:enable Layout/LineLength
   system("echo \"#{verifymd5}  #{package}\" > #{jobfile}:dir/meta")
 end
@@ -156,9 +152,7 @@ module ActionDispatch
     class Session
       def add_auth(headers)
         headers = {} if headers.nil?
-        if !headers.key?('HTTP_AUTHORIZATION') && IntegrationTest.basic_auth
-          headers['HTTP_AUTHORIZATION'] = IntegrationTest.basic_auth
-        end
+        headers['HTTP_AUTHORIZATION'] = IntegrationTest.basic_auth if !headers.key?('HTTP_AUTHORIZATION') && IntegrationTest.basic_auth
 
         headers
       end
@@ -213,9 +207,7 @@ module Webui
       visit opts[:to] if opts[:to]
 
       @current_user = user
-      if opts[:do_assert] != false
-        assert_match %r{^#{user}( |$)}, find(:css, '#link-to-user-home').text
-      end
+      assert_match(/^#{user}( |$)/, find(:css, '#link-to-user-home').text) if opts[:do_assert] != false
       # login into API to ease test cases
       prepare_request_with_user(user, password)
     end
@@ -369,7 +361,7 @@ class ActiveSupport::TestCase
 
   def assert_no_xml_tag(data, conds)
     ret = check_xml_tag(data, conds)
-    assert !ret, "expected no tag, but found tag matching #{conds.inspect} in:\n#{data}" if ret
+    assert_not ret, "expected no tag, but found tag matching #{conds.inspect} in:\n#{data}" if ret
   end
 
   def load_fixture(path)

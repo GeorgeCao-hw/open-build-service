@@ -62,10 +62,11 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
   context 'for role addition group' do
     describe 'for projects' do
       let(:roleaddition_group) { create(:group) }
+
       it 'can be submitted' do
         login submitter
         visit project_show_path(project: target_project)
-        click_menu_link('Actions', 'Request Role Addition')
+        desktop? ? click_link('Request Role Addition') : click_menu_link('Actions', 'Request Role Addition')
         choose 'Bugowner'
         choose 'Group'
         fill_in 'Group:', with: roleaddition_group.title
@@ -98,10 +99,11 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
                                         creator: submitter,
                                         person_name: submitter)
       end
+
       it 'can be submitted' do
         login submitter
         visit package_show_path(project: target_project, package: target_package)
-        click_menu_link('Actions', 'Request Role Addition')
+        desktop? ? click_link('Request Role Addition') : click_menu_link('Actions', 'Request Role Addition')
         choose 'Maintainer'
         choose 'Group'
         fill_in 'Group:', with: roleaddition_group.title
@@ -130,7 +132,7 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
       it 'can be submitted' do
         login submitter
         visit project_show_path(project: target_project)
-        click_menu_link('Actions', 'Request Role Addition')
+        desktop? ? click_link('Request Role Addition') : click_menu_link('Actions', 'Request Role Addition')
         choose 'Bugowner'
         choose 'User'
         fill_in 'User:', with: "#{submitter.login}"
@@ -162,10 +164,11 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
                                         creator: submitter,
                                         person_name: submitter)
       end
+
       it 'can be submitted' do
         login submitter
         visit package_show_path(project: target_project, package: target_package)
-        click_menu_link('Actions', 'Request Role Addition')
+        desktop? ? click_link('Request Role Addition') : click_menu_link('Actions', 'Request Role Addition')
         choose 'Maintainer'
         choose 'User'
         fill_in 'User:', with: submitter.login
@@ -220,6 +223,7 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
 
     describe 'for group' do
       let(:review_group) { create(:group) }
+
       it 'opens a review' do
         login submitter
         visit request_show_path(bs_request)
@@ -245,6 +249,7 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
 
     describe 'for package' do
       let(:package) { create(:package, project: submitter.home_project) }
+
       it 'opens a review' do
         login submitter
         visit request_show_path(bs_request)
@@ -308,13 +313,13 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
 
   describe 'shows the correct auto accepted message' do
     before do
-      bs_request.update_attributes(accept_at: Time.now)
+      bs_request.update(accept_at: Time.now)
     end
 
     it 'when request is in a final state' do
-      bs_request.update_attributes(state: :accepted)
+      bs_request.update(state: :accepted)
       visit request_show_path(bs_request)
-      expect(page).to have_text("Auto-accept was set to #{I18n.localize bs_request.accept_at, format: :only_date}.")
+      expect(page).to have_text("Auto-accept was set to #{I18n.l(bs_request.accept_at, format: :only_date)}.")
     end
 
     it 'when request auto_accept is in the past and not in a final state' do
@@ -323,7 +328,7 @@ RSpec.describe 'Bootstrap_Requests', type: :feature, js: true, vcr: true do
     end
 
     it 'when request auto_accept is in the future and not in a final state' do
-      bs_request.update_attributes(accept_at: Time.now + 1.day)
+      bs_request.update(accept_at: Time.now + 1.day)
       visit request_show_path(bs_request)
       expect(page)
         .to have_text("This request will be automatically accepted in #{ApplicationController.helpers.time_ago_in_words(bs_request.accept_at)}.")

@@ -131,7 +131,7 @@ class PackageTest < ActiveSupport::TestCase
   end
 
   def test_can_be_deleted
-    assert !packages(:kde4_kdelibs).check_weak_dependencies!
+    assert_not packages(:kde4_kdelibs).check_weak_dependencies!
   end
 
   def test_store
@@ -205,14 +205,14 @@ class PackageTest < ActiveSupport::TestCase
       np.save!
       np.update_from_xml(xh)
       assert_equal np.name, 'testpack'
-      assert np.id > 0
+      assert np.id.positive?
       assert np.id != @package.id
     end
   end
 
   test 'invalid names are catched' do
     @package.name = '_coolproject'
-    assert !@package.save
+    assert_not @package.save
     assert_raise(ActiveRecord::RecordInvalid) do
       @package.save!
     end
@@ -220,11 +220,11 @@ class PackageTest < ActiveSupport::TestCase
     e = assert_raise(ActiveRecord::RecordInvalid) do
       @package.save!
     end
-    assert_match %r{Name is too long}, e.message
+    assert_match(/Name is too long/, e.message)
     @package.name = '_product'
     assert @package.valid?
     @package.name = '.product'
-    assert !@package.valid?
+    assert_not @package.valid?
     @package.name = 'product.i586'
     assert @package.valid?
   end
@@ -338,7 +338,7 @@ class PackageTest < ActiveSupport::TestCase
     generate_suffixes(['diff', 'txt', 'csv', 'pm', 'c', 'rb', 'h']).each do |suffix|
       file_paths.each do |file_path|
         filename = file_path + '.' + suffix
-        assert !Package.is_binary_file?(filename), "File #{filename} should not be treated as binary"
+        assert_not Package.is_binary_file?(filename), "File #{filename} should not be treated as binary"
       end
     end
   end

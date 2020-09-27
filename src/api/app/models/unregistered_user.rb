@@ -16,11 +16,11 @@ class UnregisteredUser < User
     # No registering if we use an authentication proxy
     if CONFIG['proxy_auth_mode'] == :on || CONFIG['ichain_mode'] == :on
       logger.debug 'Someone tried to register with "proxy_auth_mode" turned on'
-      if CONFIG['proxy_auth_register_page'].blank?
-        err_msg = 'Sorry, please sign up using the authentication proxy'
-      else
-        err_msg = "Sorry, please sign up using #{CONFIG['proxy_auth_register_page']}"
-      end
+      err_msg = if CONFIG['proxy_auth_register_page'].blank?
+                  'Sorry, please sign up using the authentication proxy'
+                else
+                  "Sorry, please sign up using #{CONFIG['proxy_auth_register_page']}"
+                end
       raise ErrRegisterSave, err_msg
     end
 
@@ -33,9 +33,7 @@ class UnregisteredUser < User
     end
 
     # Turn on registration if it's enabled
-    if ['allow', 'confirmation'].include?(::Configuration.registration)
-      return true
-    end
+    return true if ['allow', 'confirmation'].include?(::Configuration.registration)
 
     # This shouldn't happen, but disable registration by default.
     logger.debug "Huh? This shouldn't happen. UnregisteredUser.can_register ran out of options"
@@ -59,9 +57,7 @@ class UnregisteredUser < User
       ignore_auth_services: Configuration.ldap_enabled?
     )
 
-    unless newuser.save
-      raise ErrRegisterSave, "Could not save the registration, details: #{newuser.errors.full_messages.to_sentence}"
-    end
+    raise ErrRegisterSave, "Could not save the registration, details: #{newuser.errors.full_messages.to_sentence}" unless newuser.save
 
     return unless newuser.state == 'unconfirmed'
 

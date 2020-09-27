@@ -51,7 +51,7 @@ class ProjectLogEntry < ApplicationRecord
   # reach us through Event...
   def additional_info=(obj)
     self[:additional_info] = YAML.dump(obj)[0..65_534]
-  rescue
+  rescue StandardError
     self[:additional_info] = nil
   end
 
@@ -70,7 +70,7 @@ class ProjectLogEntry < ApplicationRecord
       username = User.find_by(id: payload[key]).try(:login) if key == 'commenter'
       return username unless username.blank? || username == 'unknown'
     end
-    return
+    nil
   end
 end
 

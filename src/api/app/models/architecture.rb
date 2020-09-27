@@ -10,9 +10,9 @@ class Architecture < ApplicationRecord
   has_many :repositories, through: :repository_architectures
   has_many :flags
 
+  after_destroy :discard_cache
   #### Callbacks macros: before_save, after_save, etc.
   after_save :discard_cache
-  after_destroy :discard_cache
 
   #### Scopes (first the default_scope macro if is used)
   scope :available, -> { where(available: 1) }
@@ -31,9 +31,7 @@ class Architecture < ApplicationRecord
   end
 
   def self.from_cache!(archname)
-    unless archcache.key?(archname)
-      raise ActiveRecord::RecordNotFound, "unknown architecture: '#{archname}'"
-    end
+    raise ActiveRecord::RecordNotFound, "unknown architecture: '#{archname}'" unless archcache.key?(archname)
 
     archcache[archname]
   end

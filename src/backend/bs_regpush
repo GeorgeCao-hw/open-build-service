@@ -53,6 +53,7 @@ my $delete_except_mode;
 my $list_mode;
 my @tags;
 my $blobdir;
+my $oci;
 
 my $registryserver;
 my $repository;
@@ -162,7 +163,7 @@ sub blob_fetch {
 sub manifest_exists {
   my ($manifest, $tag, $content_type) = @_;
 
-  $content_type ||= 'application/vnd.docker.distribution.manifest.v2+json';
+  $content_type ||= $BSContar::mt_docker_manifest;
   my $maniid = 'sha256:'.Digest::SHA::sha256_hex($manifest);
   $tag = $maniid unless defined $tag;
   my $replyheaders;
@@ -188,9 +189,9 @@ sub manifest_upload {
 
   my $maniid = 'sha256:'.Digest::SHA::sha256_hex($manifest);
   return $maniid if manifest_exists($manifest, $tag, $content_type);
-  $content_type ||= 'application/vnd.docker.distribution.manifest.v2+json';
+  $content_type ||= $BSContar::mt_docker_manifest;
   my $fat = '';
-  $fat = 'fat ' if $content_type eq 'application/vnd.docker.distribution.manifest.list.v2+json';
+  $fat = 'fat ' if $content_type eq $BSContar::mt_docker_manifestlist || $content_type eq $BSContar::mt_oci_index;
   if (!$quiet) {
     if (defined($tag)) {
       print "uploading ${fat}manifest $maniid for tag '$tag'... ";
@@ -283,7 +284,7 @@ sub get_manifest_for_tag {
   my $replyheaders;
   my $param = {
     'uri' => "$registryserver/v2/$repository/manifests/$tag",
-    'headers' => [ "Accept: application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" ],
+    'headers' => [ "Accept: $BSContar::mt_docker_manifest, $BSContar::mt_docker_manifestlist, $BSContar::mt_oci_manifest, $BSContar::mt_oci_index" ],
     'authenticator' => $registry_authenticator,
     'replyheaders' => \$replyheaders,
     'timeout' => $registry_timeout,
@@ -330,16 +331,20 @@ sub delete_tag {
 
 sub list_tag {
   my ($tag) = @_;
-  
+
   my ($mani, $maniid) = get_manifest_for_tag($tag);
   if (!$mani) {
     printf "%-20s -\n", $tag;
   } elsif (!$mani->{'mediaType'}) {
     printf "%-20s %s %s\n", $tag, $maniid, 'v1image';
-  } elsif ($mani->{'mediaType'} eq 'application/vnd.docker.distribution.manifest.list.v2+json') {
+  } elsif ($mani->{'mediaType'} eq $BSContar::mt_docker_manifestlist) {
     printf "%-20s %s %s\n", $tag, $maniid, 'list';
-  } elsif ($mani->{'mediaType'} eq 'application/vnd.docker.distribution.manifest.v2+json') {
+  } elsif ($mani->{'mediaType'} eq $BSContar::mt_docker_manifest) {
     printf "%-20s %s %s\n", $tag, $maniid, 'image';
+  } elsif ($mani->{'mediaType'} eq $BSContar::mt_oci_manifest) {
+    printf "%-20s %s %s\n", $tag, $maniid, 'ociimage';
+  } elsif ($mani->{'mediaType'} eq $BSContar::mt_oci_index) {
+    printf "%-20s %s %s\n", $tag, $maniid, 'ocilist';
   } else {
     printf "%-20s %s %s\n", $tag, $maniid, 'unknown';
   }
@@ -361,7 +366,7 @@ sub tags_from_digestfile {
 }
 
 sub construct_container_tar {
-  my ($containerinfo) = @_; 
+  my ($containerinfo) = @_;
 
   die("Must specify a blobdir for containerinfos\n") unless $blobdir;
   my $manifest = $containerinfo->{'tar_manifest'};
@@ -381,18 +386,25 @@ sub construct_container_tar {
 sub open_tarfile {
   my ($tarfile) = @_;
 
-  my ($tar, $tarfd, $variant);
+  my ($tar, $tarfd, $govariant);
   if ($tarfile =~ /\.containerinfo$/) {
     my $containerinfo_json = readstr($tarfile);
     my $containerinfo = JSON::XS::decode_json($containerinfo_json);
-    $variant = $containerinfo->{'govariant'};
+    $govariant = $containerinfo->{'govariant'};
     $tar = construct_container_tar($containerinfo);
+  } elsif ($tarfile =~ /\.helminfo$/) {
+    my $chart = $tarfile;
+    $chart =~ s/\.helminfo$/.tgz/;
+    die("$chart: $!\n") unless -e $chart;
+    my $helminfo_json = readstr($tarfile);
+    my $helminfo = JSON::XS::decode_json($helminfo_json);
+    ($tar) = BSContar::container_from_helm($chart, $helminfo->{'config_json'}, $helminfo->{'tags'});
   } else {
     open($tarfd, '<', $tarfile) || die("$tarfile: $!\n");
     $tar = BSTar::list($tarfd);
     $_->{'file'} = $tarfd for @$tar;
   }
-  return ($tar, $tarfd, $variant);
+  return ($tar, $tarfd, $govariant);
 }
 
 sub die_with_usage {
@@ -448,6 +460,9 @@ while (@ARGV) {
   } elsif ($ARGV[0] eq '-B') {
     $blobdir = $ARGV[1];
     splice(@ARGV, 0, 2);
+  } elsif ($ARGV[0] eq '--oci') {
+    $oci = 1;
+    shift @ARGV;
   } else {
     last;
   }
@@ -528,10 +543,13 @@ if ($use_image_tags && @tarfiles > 1) {
   $use_image_tags = 0;
 }
 
+# use oci types if we have a helm chart
+$oci = 1 if grep {/\.helminfo$/} @tarfiles;
+
 my @multimanifests;
 my %multiplatforms;
 for my $tarfile (@tarfiles) {
-  my ($tar, $tarfd, $variant) = open_tarfile($tarfile);
+  my ($tar, $tarfd, $govariant) = open_tarfile($tarfile);
   my %tar = map {$_->{'name'} => $_} @$tar;
 
   my ($manifest_ent, $manifest) = BSContar::get_manifest(\%tar);
@@ -548,14 +566,19 @@ for my $tarfile (@tarfiles) {
 
   my @layers = @{$manifest->{'Layers'} || []};
   die("container has no layers\n") unless @layers;
-  my $config_layers = $config->{'rootfs'}->{'diff_ids'};
-  die("layer number mismatch\n") if @layers != @{$config_layers || []};
+  my $config_layers;
+  if ($config->{'rootfs'} && $config->{'rootfs'}->{'diff_ids'}) {
+    $config_layers = $config->{'rootfs'}->{'diff_ids'};
+    die("layer number mismatch\n") if @layers != @{$config_layers || []};
+  }
 
-  $variant = $config->{'variant'} if $config->{'variant'};
+  my $goarch = $config->{'architecture'} || 'any';
+  my $goos = $config->{'os'} || 'any';
+  $govariant = $config->{'variant'} if $config->{'variant'};
   if ($multiarch) {
     # see if a already have this arch/os combination
-    my $platformstr = "architecture:$config->{'architecture'} os:$config->{'os'}";
-    $platformstr .= " variant:$variant" if $variant;
+    my $platformstr = "architecture:$goarch os:$goos";
+    $platformstr .= " variant:$govariant" if $govariant;
     if ($multiplatforms{$platformstr}) {
       print "ignoring $tarfile, already have $platformstr\n";
       close $tarfd if $tarfd;
@@ -568,14 +591,14 @@ for my $tarfile (@tarfiles) {
   # process config
   my $config_blobid = BSContar::blobid_entry($config_ent);
   # create layer data
-  my $config_data = { 
-    'mediaType' => 'application/vnd.docker.container.image.v1+json',
+  my $config_data = {
+    'mediaType' => $config_ent->{'mimetype'} || ($oci ? $BSContar::mt_oci_config : $BSContar::mt_docker_config),
     'size' => $config_ent->{'size'},
     'digest' => $config_blobid,
-  }; 
+  };
   # upload to server
   blob_upload($config_blobid, $config_ent);
-  
+
   # process layers (compress if necessary)
   my %layer_datas;
   my @layer_data;
@@ -601,7 +624,7 @@ for my $tarfile (@tarfiles) {
 
     # create layer data
     my $layer_data = {
-      'mediaType' => 'application/vnd.docker.image.rootfs.diff.tar.gzip',
+      'mediaType' => $layer_ent->{'mimetype'} || ($oci ? $BSContar::mt_oci_layer_gzip : $BSContar::mt_docker_layer_gzip),
       'size' => $layer_ent->{'size'},
       'digest' => $blobid,
     };
@@ -613,37 +636,38 @@ for my $tarfile (@tarfiles) {
   }
   close $tarfd if $tarfd;
 
+  my $mediaType = $oci ? $BSContar::mt_oci_manifest : $BSContar::mt_docker_manifest;
   my $mani = {
     'schemaVersion' => 2,
-    'mediaType' => 'application/vnd.docker.distribution.manifest.v2+json',
+    'mediaType' => $mediaType,
     'config' => $config_data,
     'layers' => \@layer_data,
   };
   my $mani_json = BSContar::create_dist_manifest($mani);
 
   if ($multiarch) {
-    manifest_upload($mani_json, undef);		# upload anonymous image
+    manifest_upload($mani_json, undef, $mediaType);	# upload anonymous image
     my $multimani = {
-      'mediaType' => 'application/vnd.docker.distribution.manifest.v2+json',
+      'mediaType' => $mediaType,
       'size' => length($mani_json),
       'digest' => 'sha256:'.Digest::SHA::sha256_hex($mani_json),
-      'platform' => {'architecture' => $config->{'architecture'}, 'os' => $config->{'os'}},
+      'platform' => {'architecture' => $goarch, 'os' => $goos},
     };
-    $multimani->{'platform'}->{'variant'} = $variant if $variant;
+    $multimani->{'platform'}->{'variant'} = $govariant if $govariant;
     push @multimanifests, $multimani;
   } else {
-    manifest_upload_tags($mani_json, \@tags);
+    manifest_upload_tags($mani_json, \@tags, $mediaType);
   }
 }
 
 if ($multiarch) {
-  my $ct = 'application/vnd.docker.distribution.manifest.list.v2+json';
+  my $mediaType = $oci ? $BSContar::mt_oci_index : $BSContar::mt_docker_manifestlist;
   my $mani = {
     'schemaVersion' => 2,
-    'mediaType' => $ct,
+    'mediaType' => $mediaType,
     'manifests' => \@multimanifests,
   };
   my $mani_json = BSContar::create_dist_manifest_list($mani);
-  manifest_upload_tags($mani_json, \@tags, $ct);
+  manifest_upload_tags($mani_json, \@tags, $mediaType);
 }
 

@@ -8,6 +8,7 @@ RSpec.describe EventMailer, vcr: true do
   # Needed for X-OBS-URL
   before do
     allow_any_instance_of(Configuration).to receive(:obs_url).and_return('https://build.example.com')
+    allow_any_instance_of(BsRequestAction).to receive(:contains_change?).and_return(true)
   end
 
   let!(:receiver) { create(:confirmed_user) }
@@ -77,8 +78,8 @@ RSpec.describe EventMailer, vcr: true do
       end
 
       it 'renders links absolute' do
-        expected_html = "<p>Hey <a href='https://build.example.com/users/#{receiver.login}'>@#{receiver.login}</a> "
-        expected_html += "how are things? Look at <a href='https://build.example.com/project/show/apache'>bug</a> please."
+        expected_html = "<p>Hey <a href=\"https://build.example.com/users/#{receiver.login}\">@#{receiver.login}</a> "
+        expected_html += 'how are things? Look at <a href="https://build.example.com/project/show/apache">bug</a> please.'
         expect(mail.html_part.to_s).to include(expected_html)
       end
 
@@ -111,7 +112,7 @@ RSpec.describe EventMailer, vcr: true do
         let!(:comment) { create(:comment_project, body: "I ❤️ @#{vip.login}!") }
 
         it { expect(mail.text_part.body.encoded).to include("I ❤️ [@#{vip.login}](https://build.example.com/users/") }
-        it { expect(mail.html_part.to_s).to include("I =E2=9D=A4=EF=B8=8F <a href=3D'https://build.example.com/users/") }
+        it { expect(mail.html_part.to_s).to include('I =E2=9D=A4=EF=B8=8F <a href=3D"https://build.example.com/users/') }
       end
     end
 
@@ -119,6 +120,7 @@ RSpec.describe EventMailer, vcr: true do
       let(:group) { create(:group, email: nil) }
       let(:empty_event) { nil }
       let(:subscribers) { [group] }
+
       subject! { EventMailer.event(subscribers, empty_event).deliver_now }
 
       it 'does not get delivered' do

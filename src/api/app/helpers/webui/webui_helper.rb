@@ -39,11 +39,11 @@ module Webui::WebuiHelper
   def format_projectname(prjname, login)
     splitted = prjname.split(':', 3)
     if splitted[0] == 'home'
-      if login && splitted[1] == login
-        prjname = '~'
-      else
-        prjname = "~#{splitted[1]}"
-      end
+      prjname = if login && splitted[1] == login
+                  '~'
+                else
+                  "~#{splitted[1]}"
+                end
       prjname += ":#{splitted[-1]}" if splitted.length > 2
     end
     prjname
@@ -72,7 +72,7 @@ module Webui::WebuiHelper
     'published' => 'Repository has been published',
     'publishing' => 'Repository is being created right now',
     'unpublished' => 'Build finished, but repository publishing is disabled',
-    'building' => 'Build jobs exists',
+    'building' => 'Build jobs exist',
     'finished' => 'Build jobs have been processed, new repository is not yet created',
     'blocked' => 'No build possible atm, waiting for jobs in other repositories',
     'broken' => 'The repository setup is broken, build or publish not possible',
@@ -110,7 +110,7 @@ module Webui::WebuiHelper
     repo_state_class = repository_state_class(outdated, status)
 
     data_options = {}
-    data_options.merge!(content: description, placement: 'top', toggle: 'popover') unless flipper_responsive?
+    data_options.merge!(content: description, placement: 'top', toggle: 'popover') unless feature_enabled?(:responsive_ux)
     tag.i('', class: "repository-state-#{repo_state_class} #{html_class} fas fa-#{repo_status_icon(status)}", data: data_options)
   end
 
@@ -124,7 +124,7 @@ module Webui::WebuiHelper
   def repository_state_class(outdated, status)
     return 'outdated' if outdated
 
-    return status =~ /broken|building|finished|publishing|published/ ? status : 'default'
+    status =~ /broken|building|finished|publishing|published/ ? status : 'default'
   end
 
   # Shortens a text if it longer than 'length'.
@@ -155,9 +155,9 @@ module Webui::WebuiHelper
   def elide_two(text1, text2, overall_length = 40, mode = :middle)
     half_length = overall_length / 2
     text1_free = half_length - text1.to_s.length
-    text1_free = 0 if text1_free < 0
+    text1_free = 0 if text1_free.negative?
     text2_free = half_length - text2.to_s.length
-    text2_free = 0 if text2_free < 0
+    text2_free = 0 if text2_free.negative?
     [elide(text1, half_length + text2_free, mode), elide(text2, half_length + text1_free, mode)]
   end
 
@@ -165,11 +165,9 @@ module Webui::WebuiHelper
     return '' if text.blank?
 
     text.force_encoding('UTF-8')
-    unless text.valid_encoding?
-      text = 'The file you look at is not valid UTF-8 text. Please convert the file.'
-    end
+    text = 'The file you look at is not valid UTF-8 text. Please convert the file.' unless text.valid_encoding?
     # Ged rid of stuff that shouldn't be part of PCDATA:
-    text.gsub(/([^a-zA-Z0-9&;<>\/\n \t()])/) do
+    text.gsub(%r{([^a-zA-Z0-9&;<>/\n \t()])}) do
       if Regexp.last_match(1)[0].getbyte(0) < 32
         ''
       else
@@ -209,11 +207,11 @@ module Webui::WebuiHelper
         elide_two(opts[:project_text], opts[:package_text], opts[:trim_to])
     end
 
-    if opts[:short]
-      out = ''.html_safe
-    else
-      out = 'package '.html_safe
-    end
+    out = if opts[:short]
+            ''.html_safe
+          else
+            'package '.html_safe
+          end
 
     opts[:short] = true # for project
     out += link_to_project(prj, opts) + ' / ' +
@@ -233,11 +231,11 @@ module Webui::WebuiHelper
 
   def link_to_project(prj, opts)
     opts[:project_text] ||= opts[:project]
-    if opts[:short]
-      out = ''.html_safe
-    else
-      out = 'project '.html_safe
-    end
+    out = if opts[:short]
+            ''.html_safe
+          else
+            'project '.html_safe
+          end
     project_text = opts[:trim_to].nil? ? opts[:project_text] : elide(opts[:project_text], opts[:trim_to])
     out + link_to_if(prj, project_text,
                      { controller: '/webui/project', action: 'show', project: opts[:project] },
@@ -252,12 +250,8 @@ module Webui::WebuiHelper
     prj = Project.where(name: opts[:project]).select(:id, :name, :updated_at).first
     # Expires in 2 hours so that changes of local and remote packages eventually result in an update
     Rails.cache.fetch(['project_or_package_link', prj.try(:id), opts], expires_in: 2.hours) do
-      if prj && opts[:creator]
-        opts[:project_text] ||= format_projectname(opts[:project], opts[:creator])
-      end
-      if opts[:package] && prj && opts[:package] != :multiple
-        pkg = prj.packages.where(name: opts[:package]).select(:id, :name, :project_id).first
-      end
+      opts[:project_text] ||= format_projectname(opts[:project], opts[:creator]) if prj && opts[:creator]
+      pkg = prj.packages.where(name: opts[:package]).select(:id, :name, :project_id).first if opts[:package] && prj && opts[:package] != :multiple
       if opts[:package]
         link_to_package(prj, pkg, opts)
       else
@@ -272,7 +266,7 @@ module Webui::WebuiHelper
 
   def replace_jquery_meta_characters(input)
     # The stated characters are c&p from https://api.jquery.com/category/selectors/
-    input.gsub(/[!"#$%&'()*+,.\/:\\;<=>?@\[\]^`{|}~]/, '_')
+    input.gsub(%r{[!"#$%&'()*+,./:\\;<=>?@\[\]^`{|}~]}, '_')
   end
 
   def word_break(string, length = 80)
@@ -330,24 +324,30 @@ module Webui::WebuiHelper
     show_checks = [max_shown, remaining_checks.length].min
     show_builds = [max_shown - show_checks, remaining_build_problems.length].min
     # always prefer one build fail
-    if show_builds == 0 && remaining_build_problems.present?
+    if show_builds.zero? && remaining_build_problems.present?
       show_builds += 1
       show_checks -= 1
     end
 
     checks = remaining_checks.shift(show_checks)
     build_problems = remaining_build_problems.shift(show_builds)
-    return checks, build_problems, remaining_checks, remaining_build_problems
+    [checks, build_problems, remaining_checks, remaining_build_problems]
   end
 
-  # responsive_ux:
-  def flipper_responsive?
-    Flipper.enabled?(:responsive_ux, User.possibly_nobody)
+  def feature_enabled?(feature)
+    Flipper.enabled?(feature, User.possibly_nobody)
+  end
+
+  def feature_css_class
+    css_classes = []
+    css_classes << 'responsive-ux' if feature_enabled?(:responsive_ux)
+    css_classes << 'notifications-redesign' if feature_enabled?(:notifications_redesign)
+    css_classes.join(' ')
   end
 
   # responsive_ux:
   def responsive_namespace
-    flipper_responsive? ? 'webui/responsive_ux' : 'webui'
+    feature_enabled?(:responsive_ux) ? 'webui/responsive_ux' : 'webui'
   end
 
   def sign_up_link(css_class: nil)
@@ -380,7 +380,7 @@ module Webui::WebuiHelper
     if css_class && css_class.include?('nav-link')
       capture do
         concat(tag.i('', class: "fas #{icon}"))
-        concat(tag.div(text, class: 'small'))
+        concat(tag.div(text, class: feature_enabled?(:responsive_ux) ? '' : 'small'))
       end
     else
       text

@@ -21,12 +21,8 @@ module HasRelationships
   end
 
   def bugowner_emails
-    ret = []
-    relationships.where(role: Role.hashed['bugowner']).joins(:user).each do |bugowner|
-      mail = bugowner.user.email
-      ret.push(mail.to_s) if mail
-    end
-    ret
+    # TODO: why on User.rb we accept email blank?
+    relationships.bugowners_with_email.pluck(:email)
   end
 
   def render_relationships(xml)
@@ -40,23 +36,23 @@ module HasRelationships
   end
 
   def user_has_role?(user, role)
-    return true if relationships.where(role_id: role.id, user_id: user.id).exists?
+    return true if relationships.exists?(role_id: role.id, user_id: user.id)
 
-    relationships.where(role_id: role).joins(:groups_users).where(groups_users: { user_id: user.id }).exists?
+    relationships.where(role_id: role).joins(:groups_users).exists?(groups_users: { user_id: user.id })
   end
 
   def group_has_role?(group, role)
-    relationships.where(role_id: role.id, group_id: group.id).exists?
+    relationships.exists?(role_id: role.id, group_id: group.id)
   end
 
   def remove_role(what, role)
     check_write_access!
 
-    if what.is_a?(Group)
-      rel = relationships.where(group_id: what.id)
-    else
-      rel = relationships.where(user_id: what.id)
-    end
+    rel = if what.is_a?(Group)
+            relationships.where(group_id: what.id)
+          else
+            relationships.where(user_id: what.id)
+          end
     rel = rel.where(role_id: role.id) if role
     transaction do
       rel.delete_all

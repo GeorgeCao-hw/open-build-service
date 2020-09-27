@@ -48,7 +48,8 @@ class PublicController < ApplicationController
     # project visible/known ?
     @project = Project.get_by_name(params[:project])
     path = unshift_public(request.path_info)
-    if params[:view] == 'info'
+    case params[:view]
+    when 'info'
       # nofilename since a package may have no source access
       if params[:nofilename] && params[:nofilename] != '1'
         render_error status: 400, errorcode: 'parameter_error', message: 'nofilename is not allowed as parameter'
@@ -57,11 +58,11 @@ class PublicController < ApplicationController
       # path has multiple package= parameters
       path += '?' + request.query_string
       path += '&nofilename=1' unless params[:nofilename]
-    elsif params[:view] == 'verboseproductlist'
+    when 'verboseproductlist'
       @products = Product.all_products(@project, params[:expand])
       render 'source/verboseproductlist'
       return
-    elsif params[:view] == 'productlist'
+    when 'productlist'
       @products = Product.all_products(@project, params[:expand])
       render 'source/productlist'
       return
@@ -158,9 +159,7 @@ class PublicController < ApplicationController
         dist_id = dist.id
         @binary_links[dist_id] ||= {}
         binary = binary_map[repo.name].select { |bin| bin.value(:name) == @pkg.name }.first
-        if binary && dist.vendor == 'openSUSE'
-          @binary_links[dist_id][:ymp] = { url: ymp_url(File.join(@pkg.project.name, repo.name, @pkg.name + '.ymp')) }
-        end
+        @binary_links[dist_id][:ymp] = { url: ymp_url(File.join(@pkg.project.name, repo.name, @pkg.name + '.ymp')) } if binary && dist.vendor == 'openSUSE'
 
         @binary_links[dist_id][:binary] ||= []
         binary_map[repo.name].each do |b|
@@ -169,8 +168,8 @@ class PublicController < ApplicationController
           # So we have to revert this here...
           filepath = b['filepath']
           # having both gsub! in one line can crash with some ruby builds
-          filepath.gsub!(/:\//, ':')
-          filepath.gsub!(/^[^\/]*\/[^\/]*\//, '')
+          filepath.gsub!(%r{:/}, ':')
+          filepath.gsub!(%r{^[^/]*/[^/]*/}, '')
 
           @binary_links[dist_id][:binary] << { type: binary_type, arch: b['arch'], url: repo.download_url(filepath) }
           if @binary_links[dist_id][:repository].blank?

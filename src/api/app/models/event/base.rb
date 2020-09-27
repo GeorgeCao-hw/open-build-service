@@ -19,8 +19,7 @@ module Event
     }.freeze
 
     class << self
-      attr_accessor :description
-      attr_accessor :message_bus_routing_key
+      attr_accessor :description, :message_bus_routing_key
 
       @payload_keys = nil
       @create_jobs = nil
@@ -167,7 +166,7 @@ module Event
 
         self.undone_jobs += 1
       end
-      save if self.undone_jobs > 0
+      save if self.undone_jobs.positive?
     end
 
     # to be overwritten in subclasses
@@ -185,11 +184,11 @@ module Event
       # not to break user's filters for now
       ret = {}
       ret['X-OBS-event-type'] = template_name # cheating
-      if Rails.env.test?
-        ret['Message-ID'] = "<notrandom@#{self.class.message_domain}>"
-      else
-        ret['Message-ID'] = "<#{Mail.random_tag}@#{self.class.message_domain}>"
-      end
+      ret['Message-ID'] = if Rails.env.test?
+                            "<notrandom@#{self.class.message_domain}>"
+                          else
+                            "<#{Mail.random_tag}@#{self.class.message_domain}>"
+                          end
       ret
     end
 
@@ -320,14 +319,10 @@ module Event
 
       rel = obj.relationships.where(role: Role.hashed[role])
       receivers = rel.map { |r| r.user_id ? r.user : r.group }
-      if receivers.empty? && obj.respond_to?(:project)
-        receivers = obj_roles(obj.project, role)
-      end
+      receivers = obj_roles(obj.project, role) if receivers.empty? && obj.respond_to?(:project)
 
       # for now we define develpackage maintainers as being maintainers too
-      if obj.respond_to?(:develpackage)
-        receivers.concat(obj_roles(obj.develpackage, role))
-      end
+      receivers.concat(obj_roles(obj.develpackage, role)) if obj.respond_to?(:develpackage)
       receivers
     end
 

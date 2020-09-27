@@ -1,7 +1,7 @@
 class BuildController < ApplicationController
   def index
     # for read access and visibility permission check
-    if params[:package] && !['_repository', '_jobhistory'].include?(params[:package])
+    if params[:package] && ['_repository', '_jobhistory'].exclude?(params[:package])
       Package.get_by_project_and_name(params[:project], params[:package], use_source: false, follow_multibuild: true)
     else
       Project.get_by_name(params[:project])
@@ -24,13 +24,11 @@ class BuildController < ApplicationController
 
   def project_index
     prj = nil
-    unless params[:project] == '_dispatchprios'
-      prj = Project.get_by_name(params[:project])
-    end
+    prj = Project.get_by_name(params[:project]) unless params[:project] == '_dispatchprios'
 
     if request.get?
       pass_to_backend
-      return
+      nil
     elsif request.post?
       # check if user has project modify rights
       allowed = false
@@ -38,9 +36,7 @@ class BuildController < ApplicationController
       allowed = true if permissions.project_change?(prj)
 
       # check for cmd parameter
-      if params[:cmd].nil?
-        raise MissingParameterError, "Missing parameter 'cmd'"
-      end
+      raise MissingParameterError, "Missing parameter 'cmd'" if params[:cmd].nil?
 
       unless ['wipe', 'restartbuild', 'killbuild', 'abortbuild', 'rebuild', 'unpublish', 'sendsysrq'].include?(params[:cmd])
         render_error status: 400, errorcode: 'illegal_request',
@@ -82,7 +78,7 @@ class BuildController < ApplicationController
       end
 
       pass_to_backend
-      return
+      nil
     elsif request.put?
       if User.admin_session?
         pass_to_backend
@@ -90,11 +86,11 @@ class BuildController < ApplicationController
         render_error status: 403, errorcode: 'execute_cmd_no_permission',
                      message: "No permission to execute command on project #{params[:project]}"
       end
-      return
+      nil
     else
       render_error status: 400, errorcode: 'illegal_request',
                    message: "Illegal request: #{request.method.to_s.upcase} #{request.path}"
-      return
+      nil
     end
   end
 

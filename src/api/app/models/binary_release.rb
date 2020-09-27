@@ -89,7 +89,7 @@ class BinaryRelease < ApplicationRecord
         end
         source_package = Package.striping_multibuild_suffix(binary['package'])
         rp = Package.find_by_project_and_name(binary['project'], source_package)
-        if source_package.include?(':')
+        if source_package.include?(':') && !source_package.start_with?('_product:')
           flavor_name = binary['package'].gsub(/^#{source_package}:/, '')
           hash[:flavor] = flavor_name
         end
@@ -104,9 +104,7 @@ class BinaryRelease < ApplicationRecord
         end
 
         # put a reference to the medium aka container
-        if binary['medium'].present?
-          hash[:on_medium] = medium_hash[binary['medium']]
-        end
+        hash[:on_medium] = medium_hash[binary['medium']] if binary['medium'].present?
 
         # new entry, also for modified binaries.
         entry = repository.binary_releases.create(hash)
@@ -145,7 +143,10 @@ class BinaryRelease < ApplicationRecord
       binary.operation(operation)
 
       node = {}
-      node[:package] = release_package.name if release_package
+      if release_package
+        node[:project] = release_package.project.name if release_package.project != repository.project
+        node[:package] = release_package.name
+      end
       node[:time] = binary_releasetime if binary_releasetime
       node[:flavor] = flavor if flavor
       binary.publish(node) unless node.empty?
@@ -153,7 +154,7 @@ class BinaryRelease < ApplicationRecord
       build_node = {}
       build_node[:time] = binary_buildtime if binary_buildtime
       build_node[:binaryid] = binary_id if binary_id
-      binary.build(build_node) if build_node.count > 0
+      binary.build(build_node) if build_node.count.positive?
       binary.modify(time: modify_time) if modify_time
       binary.obsolete(time: obsolete_time) if obsolete_time
 
@@ -168,9 +169,12 @@ class BinaryRelease < ApplicationRecord
         binary.updatefor(up.extend_id_hash(project: up.package.project.name, product: up.name))
       end
 
-      if product_medium
-        binary.product(product_medium.product.extend_id_hash(name: product_medium.product.name))
+      if medium && (medium_package = on_medium.try(:release_package))
+        binary.medium(project: medium_package.project.name,
+                      package: medium_package.name)
       end
+
+      binary.product(product_medium.product.extend_id_hash(name: product_medium.product.name)) if product_medium
     end
     builder.to_xml(save_with: Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
                               Nokogiri::XML::Node::SaveOptions::FORMAT)

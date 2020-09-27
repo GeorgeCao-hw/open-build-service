@@ -1,6 +1,7 @@
 require:
   - rubocop-rails
   - rubocop-rspec
+  - rubocop-performance
 
 inherit_from: .rubocop_todo.yml
 
@@ -15,6 +16,7 @@ AllCops:
     - 'vendor/bundle/**/*'
     - 'test/fixtures/backend/**/*'
     - 'files/*'
+    - 'db/schema.rb'
     - 'db/data_schema.rb'
     # this file will be deleted as soon as app/jobs/consistency_check_job.rb is validated
     - 'app/jobs/old/consistency_check_job.rb'
@@ -73,6 +75,8 @@ Metrics/BlockLength:
     - 'spec/**/*'
     - '**/*.rake'
     # FIXME: Since exclusions in `.rubocop_todo.yml` are simply ignored when we also exclude files here, the following exclusions are TODOs
+    - 'app/controllers/concerns/rescue_handler.rb'
+    - 'app/controllers/concerns/webui/rescue_handler.rb'
     - 'app/models/binary_release.rb'
     - 'app/models/branch_package.rb'
     - 'app/models/bs_request.rb'
@@ -192,7 +196,6 @@ RSpec/MultipleExpectations:
     - 'spec/models/user_spec.rb'
     - 'spec/requests/package_undelete_spec.rb'
     - 'spec/routing/api_matcher_spec.rb'
-    - 'spec/script/db/checker_spec.rb'
     - 'spec/services/notification_creator_spec.rb'
     - 'spec/support/shared_examples/a_bs_requests_data_table_controller.rb'
     - 'spec/support/shared_examples/a_bs_requests_data_table_controller_with_state_and_type_options.rb'
@@ -317,7 +320,6 @@ Style/MethodCallWithArgsParentheses:
     - info
     - kill
     - load
-    - localize
     - match_array
     - merge_timeout
     - message

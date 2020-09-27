@@ -11,14 +11,14 @@ class ApplicationController < ActionController::Base
   include ActionController::MimeResponds
   include FlipperFeature
 
+  include RescueHandler
+
   # session :disabled => true
 
   @skip_validation = false
 
   before_action :validate_xml_request, :add_api_version
-  if CONFIG['response_schema_validation'] == true
-    after_action :validate_xml_response
-  end
+  after_action :validate_xml_response if CONFIG['response_schema_validation'] == true
 
   # skip the filter for the user stuff
   before_action :extract_user
@@ -86,9 +86,7 @@ class ApplicationController < ActionController::Base
     params.each do |key, value|
       next if value.nil?
       next if key == 'xmlhash' # perfectly fine
-      unless value.is_a?(String)
-        raise InvalidParameterError, "Parameter #{key} has non String class #{value.class}"
-      end
+      raise InvalidParameterError, "Parameter #{key} has non String class #{value.class}" unless value.is_a?(String)
     end
     true
   end
@@ -188,79 +186,6 @@ class ApplicationController < ActionController::Base
   end
   public :pass_to_backend
 
-  rescue_from ActiveRecord::RecordInvalid do |exception|
-    render_error status: 400, errorcode: 'invalid_record', message: exception.record.errors.full_messages.join('\n')
-  end
-
-  rescue_from Backend::Error do |exception|
-    render_error status: exception.code, errorcode: 'uncaught_exception', message: exception.summary
-  end
-
-  rescue_from Timeout::Error do |exception|
-    render_error status: 408, errorcode: 'timeout_error', message: exception.message
-  end
-
-  rescue_from APIError do |exception|
-    bt = exception.backtrace.join("\n")
-    logger.debug "#{exception.class.name} #{exception.message} #{bt}"
-    message = exception.message
-    if message.blank? || message == exception.class.name
-      message = exception.default_message
-    end
-    render_error message: message, status: exception.status, errorcode: exception.errorcode
-  end
-
-  rescue_from Backend::Error do |exception|
-    text = exception.message
-    xml = Nokogiri::XML(text, &:strict).root
-    http_status = xml['code'] || 500
-    xml['origin'] ||= 'backend'
-    text = xml.to_xml
-    render plain: text, status: http_status
-  end
-
-  rescue_from Project::WritePermissionError do |exception|
-    render_error status: 403, errorcode: 'modify_project_no_permission', message: exception.message
-  end
-
-  rescue_from Package::WritePermissionError do |exception|
-    render_error status: 403, errorcode: 'modify_package_no_permission', message: exception.message
-  end
-
-  rescue_from Backend::NotFoundError, ActiveRecord::RecordNotFound do |exception|
-    render_error message: exception.message, status: 404, errorcode: 'not_found'
-  end
-
-  rescue_from ActionController::RoutingError do |exception|
-    render_error message: exception.message, status: 404, errorcode: 'not_route'
-  end
-
-  rescue_from Pundit::NotAuthorizedError do |exception|
-    message = 'You are not authorized to perform this action.'
-
-    pundit_action =
-      case exception.try(:query).to_s
-      when 'index?' then 'list'
-      when 'show?' then 'view'
-      when 'create?' then 'create'
-      when 'new?' then 'create'
-      when 'update?' then 'update'
-      when 'edit?' then 'edit'
-      when 'destroy?' then 'delete'
-      when 'create_branch?' then 'create_branch'
-      when 'accept?' then 'accept'
-      else exception.try(:query)
-      end
-
-    if pundit_action && exception.record
-      message = "You are not authorized to #{pundit_action} this #{ActiveSupport::Inflector.underscore(exception.record.class.to_s).humanize}."
-    end
-
-    render_error status: 403,
-                 errorcode: "#{pundit_action}_#{ActiveSupport::Inflector.underscore(exception.record.class.to_s)}_not_authorized",
-                 message: message
-  end
-
   def require_parameter!(parameter)
     raise MissingParameterError, "Required Parameter #{parameter} missing" unless params.include?(parameter.to_s)
   end
@@ -279,19 +204,19 @@ class ApplicationController < ActionController::Base
     @exception = opt[:exception]
     @errorcode = opt[:errorcode]
 
-    if opt[:status]
-      @status = opt[:status].to_i
-    else
-      @status = 400
-    end
+    @status = if opt[:status]
+                opt[:status].to_i
+              else
+                400
+              end
 
     if @status == 401
       unless response.headers['WWW-Authenticate']
-        if CONFIG['kerberos_mode']
-          response.headers['WWW-Authenticate'] = 'Negotiate'
-        else
-          response.headers['WWW-Authenticate'] = 'basic realm="API login"'
-        end
+        response.headers['WWW-Authenticate'] = if CONFIG['kerberos_mode']
+                                                 'Negotiate'
+                                               else
+                                                 'basic realm="API login"'
+                                               end
       end
     end
     if @status == 404
@@ -301,11 +226,11 @@ class ApplicationController < ActionController::Base
 
     @summary ||= 'Internal Server Error'
 
-    if @exception
-      @errorcode ||= 'uncaught_exception'
-    else
-      @errorcode ||= 'unknown'
-    end
+    @errorcode ||= if @exception
+                     'uncaught_exception'
+                   else
+                     'unknown'
+                   end
   end
 
   def render_error(opt = {})
@@ -318,9 +243,7 @@ class ApplicationController < ActionController::Base
       format.xml { render template: 'status', status: @status }
       format.json { render json: { errorcode: @errorcode, summary: @summary }, status: @status }
       format.html do
-        unless request.env['HTTP_REFERER']
-          flash[:error] = "#{@errorcode}(#{@summary}): #{@message}"
-        end
+        flash[:error] = "#{@errorcode}(#{@summary}): #{@message}" unless request.env['HTTP_REFERER']
         redirect_back(fallback_location: root_path)
       end
     end
@@ -383,7 +306,7 @@ class ApplicationController < ActionController::Base
 
     request_format = request.format != 'json'
     response_status = response.status.to_s[0..2] == '200'
-    response_headers = response.headers['Content-Type'] !~ /.*\/json/i && response.headers['Content-Disposition'] != 'attachment'
+    response_headers = response.headers['Content-Type'] !~ %r{.*/json}i && response.headers['Content-Disposition'] != 'attachment'
 
     return unless request_format && response_status && response_headers
 
@@ -456,7 +379,8 @@ class ApplicationController < ActionController::Base
     InfluxDB::Rails.current.tags = {
       beta: User.possibly_nobody.in_beta?,
       anonymous: !User.session,
-      interface: :api
+      interface: :api,
+      controller_location: "#{self.class.name}#{action_name}"
     }
   end
 end

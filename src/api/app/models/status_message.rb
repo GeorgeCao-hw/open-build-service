@@ -5,8 +5,9 @@ class StatusMessage < ApplicationRecord
 
   validates :user, :severity, :message, presence: true
 
-  scope :alive, -> { where(deleted_at: nil).order('created_at DESC') }
-  scope :announcements, -> { alive.where(severity: 'announcement') }
+  scope :announcements, -> { order('created_at DESC').where(severity: 'announcement') }
+  scope :for_current_user, -> { where(communication_scope: communication_scopes_for_current_user) }
+  scope :newest, -> { order('created_at DESC') }
 
   enum severity: { information: 0, green: 1, yellow: 2, red: 3, announcement: 4 }
   enum communication_scope: { all_users: 0, logged_in_users: 1, admin_users: 2, in_beta_users: 3, in_rollout_users: 4 }
@@ -20,11 +21,6 @@ class StatusMessage < ApplicationRecord
     scope = doc.css('scope').text
     scope = 'all_users' if scope.blank?
     StatusMessage.new(message: message, severity: severity, communication_scope: scope, user: User.session!)
-  end
-
-  def delete
-    self.deleted_at = Time.now
-    save
   end
 
   def acknowledge!
@@ -63,14 +59,13 @@ end
 #
 #  id                  :integer          not null, primary key
 #  communication_scope :integer          default("all_users")
-#  deleted_at          :datetime         indexed => [created_at]
 #  message             :text(65535)
 #  severity            :integer
-#  created_at          :datetime         indexed => [deleted_at]
+#  created_at          :datetime         indexed
 #  user_id             :integer          indexed
 #
 # Indexes
 #
-#  index_status_messages_on_deleted_at_and_created_at  (deleted_at,created_at)
-#  user                                                (user_id)
+#  index_status_messages_on_created_at  (created_at)
+#  user                                 (user_id)
 #

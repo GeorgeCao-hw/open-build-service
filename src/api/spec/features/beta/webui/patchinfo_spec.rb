@@ -10,7 +10,7 @@ RSpec.describe 'Patchinfo', type: :feature, js: true do
     it 'form incomplete' do
       login user
       visit project_show_path(user.home_project)
-      click_menu_link('Actions', 'Create Patchinfo')
+      desktop? ? click_link('Create Patchinfo') : click_menu_link('Actions', 'Create Patchinfo')
       expect(page).to have_current_path(edit_patchinfo_path(project: project, package: 'patchinfo'))
       expect(page).to have_text("Edit Patchinfo for #{project.name}")
       fill_in 'patchinfo[summary]', with: 'A' * 9
@@ -27,7 +27,7 @@ RSpec.describe 'Patchinfo', type: :feature, js: true do
     it 'form complete' do
       login user
       visit project_show_path(user.home_project)
-      click_menu_link('Actions', 'Create Patchinfo')
+      desktop? ? click_link('Create Patchinfo') : click_menu_link('Actions', 'Create Patchinfo')
       expect(page).to have_current_path(edit_patchinfo_path(project: project, package: 'patchinfo'))
       expect(page).to have_text("Edit Patchinfo for #{project.name}")
       fill_in 'patchinfo[summary]', with: 'A' * 15
@@ -40,7 +40,7 @@ RSpec.describe 'Patchinfo', type: :feature, js: true do
 
   describe 'delete Patchinfo' do
     let(:patchinfo_package) do
-      Patchinfo.new.create_patchinfo(user.home_project_name, nil) unless user.home_project.packages.where(name: 'patchinfo').exists?
+      Patchinfo.new.create_patchinfo(user.home_project_name, nil) unless user.home_project.packages.exists?(name: 'patchinfo')
       Package.get_by_project_and_name(user.home_project_name, 'patchinfo', use_source: false)
     end
 

@@ -134,7 +134,7 @@ class Webui::SearchController < Webui::WebuiController
     end
 
     # request number when string starts with a #
-    if @search_text.starts_with?('#') && @search_text[1..-1].to_i > 0
+    if @search_text.starts_with?('#') && @search_text[1..-1].to_i.positive?
       redirect_to controller: 'request', action: 'show', number: @search_text[1..-1]
       return
     end
@@ -142,9 +142,7 @@ class Webui::SearchController < Webui::WebuiController
     # The user entered an OBS-specific RPM disturl, redirect to package source files with respective revision
     if @search_text.starts_with?('obs://')
       disturl_project, _, disturl_pkgrev = @search_text.split('/')[3..5]
-      unless disturl_pkgrev.nil?
-        disturl_rev, disturl_package = disturl_pkgrev.split('-', 2)
-      end
+      disturl_rev, disturl_package = disturl_pkgrev.split('-', 2) unless disturl_pkgrev.nil?
       if disturl_project.present? && disturl_package.present? && Package.exists_by_project_and_name(disturl_project, disturl_package, follow_multibuild: true)
         redirect_to controller: 'package', action: 'show', project: disturl_project, package: disturl_package, rev: disturl_rev
         return
@@ -155,10 +153,6 @@ class Webui::SearchController < Webui::WebuiController
     end
 
     logger.debug "Searching for the string \"#{@search_text}\" in the #{@search_where}'s of #{@search_what}'s"
-    if @search_where.empty? && !@search_attrib_type_id && !@search_issue
-      flash[:error] = "You have to search for #{@search_text} in something. Click the advanced button..."
-      return
-    end
 
     @per_page = 20
     search = FullTextSearch.new(text: @search_text,

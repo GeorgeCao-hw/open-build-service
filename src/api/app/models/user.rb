@@ -4,7 +4,7 @@ require 'api_error'
 class User < ApplicationRecord
   include CanRenderModel
 
-  # Keep in sync with states defined in db/structure.sql
+  # Keep in sync with states defined in db/schema.rb
   STATES = ['unconfirmed', 'confirmed', 'locked', 'deleted', 'subaccount'].freeze
   NOBODY_LOGIN = '_nobody_'.freeze
 
@@ -67,6 +67,8 @@ class User < ApplicationRecord
     all_without_nobody.includes(:owner).select(:id, :login, :email, :state, :realname, :owner_id, :updated_at, :ignore_auth_services)
   }
 
+  scope :with_email, -> { where.not(email: [nil, '']) }
+
   scope :recently_seen, -> { where('last_logged_in_at > ?', 3.months.ago) }
 
   validates :login, :state, presence: { message: 'must be given' }
@@ -75,7 +77,7 @@ class User < ApplicationRecord
             uniqueness: { case_sensitive: true, message: 'is the name of an already existing user' }
 
   validates :login,
-            format: { with: %r{\A[\w $\^\-.#*+&'"]*\z},
+            format: { with: /\A[\w $\^\-.#*+&'"]*\z/,
                       message: 'must not contain invalid characters' }
   validates :login,
             length: { in: 2..100, allow_nil: true,
@@ -92,7 +94,7 @@ class User < ApplicationRecord
   # However, this is not *so* bad since users have to answer on their email
   # to confirm their registration.
   validates :email,
-            format: { with: %r{\A([\w\-.\#$%&!?*'+=(){}|~]+)@([0-9a-zA-Z\-.\#$%&!?*'=(){}|~]+)+\z},
+            format: { with: /\A([\w\-.\#$%&!?*'+=(){}|~]+)@([0-9a-zA-Z\-.\#$%&!?*'=(){}|~]+)+\z/,
                       message: 'must be a valid email address',
                       allow_blank: true }
 
@@ -101,8 +103,8 @@ class User < ApplicationRecord
   validates :password, length: { minimum: 6, maximum: ActiveModel::SecurePassword::MAX_PASSWORD_LENGTH_ALLOWED }, allow_nil: true
   validates :password, confirmation: true, allow_blank: true
 
-  after_create :create_home_project, :track_create
   before_save :send_metric_for_beta_change, if: :in_beta_changed?
+  after_create :create_home_project, :track_create
 
   alias flipper_id id
 
@@ -165,15 +167,13 @@ class User < ApplicationRecord
     return user if user.errors.empty?
 
     logger.info("Cannot create ldap userid: '#{login}' on OBS. Full log: #{user.errors.full_messages.to_sentence}")
-    return
+    nil
   end
 
   # This static method tries to find a user with the given login and password
   # in the database. Returns the user or nil if he could not be found
   def self.find_with_credentials(login, password)
-    if CONFIG['ldap_mode'] == :on
-      return find_with_credentials_via_ldap(login, password)
-    end
+    return find_with_credentials_via_ldap(login, password) if CONFIG['ldap_mode'] == :on
 
     user = find_by_login(login)
     user.try(:authenticate_via_password, password)
@@ -192,7 +192,7 @@ class User < ApplicationRecord
         ldap_info = UserLdapStrategy.find_with_ldap(login, password)
       rescue LoadError
         logger.warn "ldap_mode selected but 'ruby-ldap' module not installed."
-      rescue
+      rescue StandardError
         logger.debug "#{login} not found in LDAP."
       end
     end
@@ -394,13 +394,13 @@ class User < ApplicationRecord
   def is_admin?
     return @is_admin unless @is_admin.nil?
 
-    @is_admin = roles.where(title: 'Admin').exists?
+    @is_admin = roles.exists?(title: 'Admin')
   end
 
   def is_staff?
     return @is_staff unless @is_staff.nil?
 
-    @is_staff = roles.where(title: 'Staff').exists?
+    @is_staff = roles.exists?(title: 'Staff')
   end
 
   def is_nobody?
@@ -454,9 +454,7 @@ class User < ApplicationRecord
   # FIXME: This should be a policy
   # project is instance of Project
   def can_modify_project?(project, ignore_lock = nil)
-    unless project.is_a?(Project)
-      raise ArgumentError, "illegal parameter type to User#can_modify_project?: #{project.class.name}"
-    end
+    raise ArgumentError, "illegal parameter type to User#can_modify_project?: #{project.class.name}" unless project.is_a?(Project)
 
     if project.new_record?
       # Project.check_write_access(!) should have been used?
@@ -470,9 +468,7 @@ class User < ApplicationRecord
   # package is instance of Package
   def can_modify_package?(package, ignore_lock = nil)
     return false if package.nil? # happens with remote packages easily
-    unless package.is_a?(Package)
-      raise ArgumentError, "illegal parameter type to User#can_modify_package?: #{package.class.name}"
-    end
+    raise ArgumentError, "illegal parameter type to User#can_modify_package?: #{package.class.name}" unless package.is_a?(Package)
     return false if !ignore_lock && package.is_locked?
     return true if is_admin?
     return true if has_global_permission?('change_package')
@@ -517,9 +513,7 @@ class User < ApplicationRecord
   # FIXME: This should be a policy
   def can_create_attribute_definition?(object)
     object = object.attrib_namespace if object.is_a?(AttribType)
-    unless object.is_a?(AttribNamespace)
-      raise ArgumentError, "illegal parameter type to User#can_change?: #{object.class.name}"
-    end
+    raise ArgumentError, "illegal parameter type to User#can_change?: #{object.class.name}" unless object.is_a?(AttribNamespace)
 
     return true if is_admin?
 
@@ -536,9 +530,7 @@ class User < ApplicationRecord
 
   # FIXME: This should be a policy
   def can_create_attribute_in?(object, atype)
-    if !object.is_a?(Project) && !object.is_a?(Package)
-      raise ArgumentError, "illegal parameter type to User#can_change?: #{object.class.name}"
-    end
+    raise ArgumentError, "illegal parameter type to User#can_change?: #{object.class.name}" if !object.is_a?(Project) && !object.is_a?(Package)
 
     return true if is_admin?
 
@@ -773,16 +765,7 @@ class User < ApplicationRecord
   end
 
   def user_relevant_packages_for_status
-    role_id = Role.hashed['maintainer'].id
-    # First fetch the project ids
-    projects_ids = involved_projects.select(:id)
-    packages = Package.joins("LEFT OUTER JOIN relationships ON (relationships.package_id = packages.id AND relationships.role_id = #{role_id})")
-    # No maintainers
-    packages = packages.where([
-                                '(relationships.user_id = ?) OR '\
-                                '(relationships.user_id is null AND packages.project_id in (?) )', id, projects_ids
-                              ])
-    packages.pluck(:id)
+    MaintainedPackagesByUserFinder.new(self).call.pluck(:id)
   end
 
   def state
@@ -885,9 +868,7 @@ class User < ApplicationRecord
     self.login_failure_count = 0
 
     if changes.any?
-      if changes.keys.include?('email')
-        logger.info "updating email for user #{login} from proxy header: old:#{email}|new:#{env['HTTP_X_EMAIL']}"
-      end
+      logger.info "updating email for user #{login} from proxy header: old:#{email}|new:#{env['HTTP_X_EMAIL']}" if changes.keys.include?('email')
 
       # At this point some login value changed, so a successful log in is tracked
       RabbitmqBus.send_to_bus('metrics', 'login,access_point=webui value=1')
@@ -957,11 +938,11 @@ class User < ApplicationRecord
   end
 
   cattr_accessor :lookup_strategy do
-    if Configuration.ldapgroup_enabled?
-      @@lstrategy = UserLdapStrategy.new
-    else
-      @@lstrategy = UserBasicStrategy.new
-    end
+    @@lstrategy = if Configuration.ldapgroup_enabled?
+                    UserLdapStrategy.new
+                  else
+                    UserBasicStrategy.new
+                  end
   end
 end
 

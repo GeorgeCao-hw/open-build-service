@@ -37,7 +37,7 @@ GET /architectures
 XmlResult: architecture list
 
 
-== Issue Trackers
+== Issues
 
 GET /issue_trackers
 
@@ -53,30 +53,30 @@ GET /issue_trackers/<name>
 
 XmlResult: issue_tracker
 
-PUT /issue_tracker/<name>
+PUT /issue_trackers/<name>
 
   Update issue tracker data.
 
 XmlResult: status
 
-POST /issue_tracker/<name>
+POST /issue_trackers/<name>
 
   Create new issue tracker.
 
 XmlResult: status
 
-DELETE /issue_tracker/<name>
+DELETE /issue_trackers/<name>
 
   Delete issue tracker.
 
 XmlBody: none
 XmlResult: status
 
-GET /issue_trackers/show_url_for
+GET /issue_trackers/<tracker_name>/issues/<issue_name>
 
-Parameters:
-  issue: attribute used for issue search (example: 'bnc#123456')
+  Show the issue
 
+XmlResult: issue
 
 
 == Distribution List
@@ -445,24 +445,26 @@ tained version of this package
   release: release sources and binaries according to release target specification
 
 Additional Parameters:
-  noaccess: the new created project will be read protected
-  repository: set_flag for given repository or release just this repository (optional)
+  comment: description for the history
+  # for set_flag command only:
   arch: set_flag for given arch (optional)
   flag: modify this flag (build/publish/..) for set_flag command
+  repository: set_flag for given repository or release just this repository (optional)
   status: enable or disable for set_flag command
-  comment: description for the history
   # for modifychannels and addchannels command only:
   mode: how to deal with disabled channels: add_disabled(default), skip_disabled, enable_all
   # for copy command only:
   oproject: origin project name (required)
-  resign: resign all binaries with new target project key
   makeolder: make target older, the source vrev is bumped by two numbers and target by one
   makeoriginolder: make origin older, the source vrev is extended and target is guaranteed to be newer
-  withhistory: copies sources with history on copy command
-  withbinaries: copies also binaries on copy command
+  noaccess: the new created project will be read protected
+  nodelay: disables background copy operation, request will return after the job is finished
   noservice: do not run source services
+  resign: resign all binaries with new target project key
   setrelease: define a specific release tag when used with "release" command. Setting it to "-" strips
               the release string. Note: this modifies only the filename.
+  withbinaries: copies also binaries on copy command
+  withhistory: copies sources with history on copy command
 
 XmlResult: status
 
@@ -605,6 +607,23 @@ Parameters:
   oproject: old project, optional
   opackage: old package, optional
   orev: old revision, optional
+  unified: set to 1 to use unified format without looking into archives,
+           instead of custom format with showing diff of files inside archives
+  expand: set to 1 to expand any link before diffing, optional
+  filelimit: integer to limit the diff size by line numbers. built-in default
+             is used by default, disable it via 0, optional
+  tarlimit: integer to limit the diff size by line numbers. built-in default is
+            used by default for tar ball content, disable it via 0, optional
+  linkrev: specify a link revision in base package, use linkrev=base to use the
+           commit revision, optional
+  olinkrev: specify a link revision in origin package, use linkrev=base to use
+            the commit revision, optional
+  missingok: for diffing against inexisting origin, optional
+  meta: diff meta data instead of sources by setting it to 1, optional
+  file: limit diff to the given file name, optional
+  view: view=xml for structured content, optional
+  withissues: includes parsed issue tracker issues and their change state, optional
+  onlyissues: no source diff, just the tracker issues and their change state, optional
 
 Result: diff as text/plain
 
@@ -969,7 +988,12 @@ POST /request/<id>?cmd=diff
 
   Shows the diff of all affected packages.
 
-Result: diff as text/plain
+Parameters:
+  diff_to_superseded: diff relative to a given superseded request
+  view: can be set to "xml" for structured diff
+  withissues: included parsed issues
+
+Result: diff as text/plain or xml based on view parameter
 
 
 POST /request/<id>
@@ -1284,7 +1308,7 @@ GET /worker/_status
 XmlResult: workerstatus
 
 
-GET /worker/<workerid>
+GET /worker/<hostarch>:<workerid>
 
   Lists all capabilities of the worker. Can be used for constraints
 

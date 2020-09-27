@@ -68,7 +68,7 @@ RSpec.describe Project, vcr: true do
           review_2.update(state: 'accepted')
         end
 
-        it { expect(subject.map { |review| review[:id] }).not_to include(review_2.id) }
+        it { expect(subject.pluck(:id)).not_to include(review_2.id) }
       end
     end
 
@@ -176,6 +176,7 @@ RSpec.describe Project, vcr: true do
 
       context 'with disabled repository' do
         let!(:flag) { create(:build_flag, status: 'disable', project: staging_project, repo: repository.name) }
+
         it { expect(staging_project.overall_state).to eq(:acceptable) }
       end
     end

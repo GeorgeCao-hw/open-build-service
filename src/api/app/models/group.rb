@@ -15,7 +15,7 @@ class Group < ApplicationRecord
   has_many :notifications, -> { order(created_at: :desc) }, as: :subscriber, dependent: :destroy
 
   validates :title,
-            format: { with: %r{\A[\w.\-]*\z},
+            format: { with: /\A[\w.\-]*\z/,
                       message: 'must not contain invalid characters' }
   validates :title,
             length: { in: 2..100,
@@ -39,11 +39,7 @@ class Group < ApplicationRecord
 
   def update_from_xml(xmlhash)
     with_lock do
-      if xmlhash.value('email')
-        self.email = xmlhash.value('email')
-      else
-        self.email = nil
-      end
+      self.email = xmlhash.value('email')
     end
     save!
 
@@ -139,14 +135,14 @@ class Group < ApplicationRecord
     projects << -1 if projects.empty?
 
     # all packages where group is maintainer
-    packages = Relationship.where(group_id: id, role_id: role.id).joins(:package).where('packages.project_id not in (?)', projects).pluck(:package_id)
+    packages = Relationship.where(group_id: id, role_id: role.id).joins(:package).where.not('packages.project_id' => projects).pluck(:package_id)
 
     Package.where(id: packages).where.not(project_id: projects)
   end
 
   # returns the users that actually want email for this group's notifications
   def email_users
-    User.where(id: groups_users.where(email: true).pluck(:user_id))
+    User.where(id: groups_users.where(email: true).select(:user_id))
   end
 
   def display_name
@@ -193,7 +189,7 @@ class Group < ApplicationRecord
   end
 
   def maintainer?(user)
-    group_maintainers.where(user: user).exists?
+    group_maintainers.exists?(user: user)
   end
 
   private

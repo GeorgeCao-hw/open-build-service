@@ -64,8 +64,8 @@ module Webui::PackageHelper
 
   def humanize_time(seconds)
     [[60, :s], [60, :m], [24, :h], [0, :d]].map do |count, name|
-      if seconds > 0
-        seconds, n = seconds.divmod(count > 0 ? count : seconds + 1)
+      if seconds.positive?
+        seconds, n = seconds.divmod(count.positive? ? count : seconds + 1)
         "#{n.to_i}#{name}"
       end
     end.compact.reverse.join(' ')
@@ -76,11 +76,11 @@ module Webui::PackageHelper
   end
 
   def expand_diff?(filename, state)
-    state != 'deleted' && !filename.include?('/') && (filename == '_patchinfo' || filename.ends_with?('.spec', '.changes'))
+    state != 'deleted' && filename.exclude?('/') && (filename == '_patchinfo' || filename.ends_with?('.spec', '.changes'))
   end
 
   def viewable_file?(filename)
-    !Package.is_binary_file?(filename) && !filename.include?('/')
+    !Package.is_binary_file?(filename) && filename.exclude?('/')
   end
 
   def calculate_revision_on_state(revision, state)

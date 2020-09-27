@@ -521,7 +521,7 @@ make -C dist test
 
 %pre
 getent passwd obsservicerun >/dev/null || \
-    /usr/sbin/useradd -r -g obsrun -d /usr/lib/obs -s %{sbin}/nologin \
+    /usr/sbin/useradd -r -g obsrun -d %{obs_backend_data_dir}/service -s %{sbin}/nologin \
     -c "User for the build service source service" obsservicerun
 
 %service_add_pre obsscheduler.service
@@ -890,9 +890,7 @@ usermod -a -G docker obsservicerun
 %config(noreplace) %{__obs_api_prefix}/config/crawler-user-agents.json
 %{__obs_api_prefix}/config/initializers
 %dir %{__obs_api_prefix}/config/environments
-%dir %{__obs_api_prefix}/files
 %dir %{__obs_api_prefix}/db
-%{__obs_api_prefix}/db/checker.rb
 %{__obs_api_prefix}/Gemfile
 %verify(not mtime) %{__obs_api_prefix}/last_deploy
 %{__obs_api_prefix}/Gemfile.lock
@@ -926,13 +924,12 @@ usermod -a -G docker obsservicerun
 %{_sbindir}/rcobsapisetup
 %endif
 %{__obs_api_prefix}/app
-%attr(-,%{apache_user},%{apache_group})  %{__obs_api_prefix}/db/structure.sql
+%attr(-,%{apache_user},%{apache_group})  %{__obs_api_prefix}/db/schema.rb
 %attr(-,%{apache_user},%{apache_group})  %{__obs_api_prefix}/db/data_schema.rb
 %{__obs_api_prefix}/db/attribute_descriptions.rb
 %{__obs_api_prefix}/db/data
 %{__obs_api_prefix}/db/migrate
 %{__obs_api_prefix}/db/seeds.rb
-%{__obs_api_prefix}/files/wizardtemplate.spec
 %{__obs_api_prefix}/lib
 %{__obs_api_prefix}/public
 %{__obs_api_prefix}/Rakefile

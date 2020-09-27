@@ -12,9 +12,7 @@ OBSApi::Application.configure do
   config.eager_load = false
 
   # see http://guides.rubyonrails.org/action_mailer_basics.html#example-action-mailer-configuration
-  config.action_mailer.delivery_method = :smtp
-  # we deliver to mailcatcher https://github.com/sj26/mailcatcher
-  config.action_mailer.smtp_settings = { address: '127.0.0.1', port: '1025' }
+  config.action_mailer.delivery_method = :test
   config.action_mailer.raise_delivery_errors = true
 
   # Show full error reports and disable caching
@@ -70,3 +68,19 @@ CONFIG['response_schema_validation'] = true
 
 CONFIG['frontend_host'] = 'localhost'
 CONFIG['frontend_protocol'] = 'http'
+
+# Display fake sponsors above the footer on every page
+CONFIG['sponsors'] = [
+  HashWithIndifferentAccess.new(
+    name: 'Greens Food Supplies',
+    description: 'Direct delivery service',
+    icon: 'sponsor_greens-food-supplies',
+    url: '#'
+  ),
+  HashWithIndifferentAccess.new(
+    name: 'Auto Speed',
+    description: 'Same day auto parts',
+    icon: 'sponsor_auto-speed',
+    url: '#'
+  )
+]

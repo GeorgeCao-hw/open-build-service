@@ -37,23 +37,19 @@ class EventMailer < ActionMailer::Base
     template_name = e.template_name
     orig = e.originator
 
-    if orig
-      orig = orig.display_name
-    else
-      orig = mail_sender
-    end
+    orig = if orig
+             orig.display_name
+           else
+             mail_sender
+           end
 
     mail(to: recipients.sort,
          subject: e.subject,
          from: orig,
          date: e.created_at) do |format|
-      if template_exists?("event_mailer/#{template_name}", formats: [:html])
-        format.html { render template_name, locals: locals }
-      end
+      format.html { render template_name, locals: locals } if template_exists?("event_mailer/#{template_name}", formats: [:html])
 
-      if template_exists?("event_mailer/#{template_name}", formats: [:text])
-        format.text { render template_name, locals: locals }
-      end
+      format.text { render template_name, locals: locals } if template_exists?("event_mailer/#{template_name}", formats: [:text])
     end
   end
 end

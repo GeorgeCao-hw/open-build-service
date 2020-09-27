@@ -12,9 +12,9 @@ require 'pathname'
 TABLES_TO_REMOVE = ['cache_lines', 'project_log_entries'].freeze
 @params = {}
 @params[:environment] = 'development'
-@options_path = ::File.expand_path('../../config/options.yml', __FILE__)
-@database_path = ::File.expand_path('../../config/database.yml', __FILE__)
-@data_path = ::File.expand_path('../../db/data', __FILE__)
+@options_path = ::File.expand_path('../config/options.yml', __dir__)
+@database_path = ::File.expand_path('../config/database.yml', __dir__)
+@data_path = ::File.expand_path('../db/data', __dir__)
 
 OptionParser.new do |opts|
   opts.banner = 'Usage: import_database.rb [options]'
@@ -48,9 +48,7 @@ def init
   # There is only the filename given
   abort('No parameters, use --help') if @params.count == 1
 
-  if @params[:all] && (@params[:import] || @params[:load] || @params[:path])
-    abort('The --all parameter is not valid in combination with --import, --load or --filename')
-  end
+  abort('The --all parameter is not valid in combination with --import, --load or --filename') if @params[:all] && (@params[:import] || @params[:load] || @params[:path])
 
   if @params[:load] &&
      @params[:filename]
@@ -68,9 +66,7 @@ def load_dump
   filename = options[environment]['backup_filename']
   port = options[environment]['backup_port']
 
-  if !server || !username || !location || !filename
-    abort('Please specify at least backup_server, backup_user, backup_location and backup_filename in your options.yml')
-  end
+  abort('Please specify at least backup_server, backup_user, backup_location and backup_filename in your options.yml') if !server || !username || !location || !filename
 
   puts 'Downloading database backup ...'
   `scp -v -P #{port || 22} #{username}@#{server}:#{File.join(location, filename)} #{@data_path}`

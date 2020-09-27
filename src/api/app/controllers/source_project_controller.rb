@@ -22,15 +22,16 @@ class SourceProjectController < SourceController
 
     # we let the backend list the packages after we verified the project is visible
     if params.key?(:view)
-      if params[:view] == 'verboseproductlist'
+      case params[:view]
+      when 'verboseproductlist'
         @products = Product.all_products(@project, params[:expand])
         render 'source/verboseproductlist'
         return
-      elsif params[:view] == 'productlist'
+      when 'productlist'
         @products = Product.all_products(@project, params[:expand])
         render 'source/productlist'
         return
-      elsif params[:view] == 'issues'
+      when 'issues'
         render_project_issues
       else
         pass_to_backend
@@ -92,17 +93,13 @@ class SourceProjectController < SourceController
                       'createkey', 'extendkey', 'copy', 'createmaintenanceincident', 'lock',
                       'unlock', 'release', 'addchannels', 'modifychannels', 'move', 'freezelink']
 
-    unless valid_commands.include?(params[:cmd])
-      raise IllegalRequest, 'invalid_command'
-    end
+    raise IllegalRequest, 'invalid_command' unless valid_commands.include?(params[:cmd])
 
     command = params[:cmd]
     project_name = params[:project]
     params[:user] = User.session!.login
 
-    if command.in?(['undelete', 'release', 'copy', 'move'])
-      return dispatch_command(:project_command, command)
-    end
+    return dispatch_command(:project_command, command) if command.in?(['undelete', 'release', 'copy', 'move'])
 
     @project = Project.get_by_name(project_name)
 

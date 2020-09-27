@@ -41,6 +41,11 @@ our $isajax;	# is this the ajax process?
 
 our $return_ok = "<status code=\"ok\" />\n";
 
+our $memoized_files = {};
+our $memoized_size = 0;
+our $memoize_fn;
+our $memoize_max_size;
+
 sub stdreply {
   my @rep = @_;
   return unless @rep && defined($rep[0]);
@@ -131,6 +136,7 @@ sub periodic {
     exec($0, '--restart', $arg, @args);
     die("$0: $!\n");
   }
+  memoize_files($memoize_fn, $memoize_max_size) if $memoize_fn;
   if ($configurationcheck++ > 10) {
     BSConfiguration::check_configuration();
     $configurationcheck = 0;
@@ -153,6 +159,109 @@ sub periodic_ajax {
     BSServer::msg("AJAX: $conf->{'name'} goodbye.");
     exit(0);
   }
+}
+
+sub memoize_one_file {
+  my ($fn, $msize) = @_;
+  
+  BSUtil::printlog("memoizing $fn");
+  my $sizechange = 0;
+  my $fd;
+  if (!open($fd, '<', $fn)) {
+    my $mf = delete $memoized_files->{$fn};
+    $sizechange -= length($mf->[1]) if $mf;
+  } else {
+    my @s = stat($fd);
+    return 0 unless @s;
+    my $mf = $memoized_files->{$fn};
+    if ($mf) {
+      return 0 if "$s[9]/$s[7]/$s[1]" eq $mf->[0];
+      delete $memoized_files->{$fn};
+      $sizechange -= length($mf->[1]);
+    }
+    return $sizechange if $msize && $s[7] > $msize;
+    my $d = '';
+    1 while sysread($fd, $d, 8192, length($d));
+    next unless $s[7] == length($d);
+    $memoized_files->{$fn} = [ "$s[9]/$s[7]/$s[1]", $d ];
+    $sizechange += length($d);
+  }
+  return $sizechange;
+}
+
+sub memoize_files {
+  my ($fnlist, $msize) = @_;
+  return unless -s $fnlist;
+  my $file;
+  return unless open($file, '<', $fnlist);
+  unlink($fnlist);
+  my $sizechange = 0;
+  my ($fn, $d, @s);
+  while ($fn = <$file>) {
+    next unless chop($fn) eq "\n";
+    next if $fn eq '' || $fn =~ /\0/s || $fn !~ /^\//;
+    $sizechange += memoize_one_file($fn, $msize);
+  }
+  $memoized_size += $sizechange;
+  my $inmb = $memoized_size / (1024*1024);
+  BSUtil::printlog(sprintf("memoized_size is %.2f MB", $inmb));# if abs($sizechange)/($memoized_size || 1) > 0.1;
+  close $file;
+}
+
+sub add_to_memoization_list {
+  my ($fn) = @_;
+  my $fd;
+  if ($memoize_fn && BSUtil::lockopen($fd, '>>', $memoize_fn)) {
+    (syswrite($fd, "$fn\n") || 0) == length("$fn\n") || warn("$memoize_fn write: $!\n");
+    close($fd) || warn("$memoize_fn close: $!\n");
+  }
+}
+
+sub check_memoized {
+  my ($fn, $nonfatal) = @_;
+  return undef unless $memoize_fn;
+  return undef if !defined($fn) || $fn eq '' || $fn =~ /\0/s || $fn !~ /^\//;
+  # opening and closing files helps check permissions
+  my $mf = $memoized_files->{$fn};
+  my $f;
+  if (!open($f, '<', $fn)) {
+    add_to_memoization_list($fn) if $mf;
+    return undef;
+  }
+  my @s = stat($f);
+  return undef unless @s;
+  close($f);
+  return $mf->[1] if $mf && $mf->[0] eq "$s[9]/$s[7]/$s[1]";
+  add_to_memoization_list($fn);
+  return undef;
+}
+
+sub readstr_memoized {
+  my ($fn, $nonfatal) = @_;
+  my $d = check_memoized($fn, $nonfatal);
+  return $d if defined $d;
+  return readstr($fn, $nonfatal);
+}
+
+sub readxml_memoized {
+  my ($fn, $dtd, $nonfatal) = @_;
+  my $d = check_memoized($fn, $nonfatal);
+  if (defined($d)) {
+    $d = BSUtil::fromxml($d, $dtd, 1);
+    return $d if defined($d) || ($nonfatal || 0) == 1;
+  }
+  return readxml($fn, $nonfatal);
+}
+
+sub retrieve_memoized {
+  my ($fn, $nonfatal) = @_;
+  my $d;
+  $d = check_memoized($fn, $nonfatal) unless ref($fn);
+  if (defined($d)) {
+    $d = BSUtil::fromstorable($d, 1);
+    return $d if defined($d) || ($nonfatal || 0) == 1;
+  }
+  return BSUtil::retrieve($fn, $nonfatal);
 }
 
 sub serverstatus {
@@ -340,6 +449,10 @@ sub server {
     BSServer::msg("$name started on ports $conf->{port} and $conf->{port2}");
   } else {
     BSServer::msg("$name started on port $conf->{port}");
+  }
+  if ($conf->{'memoize'}) {
+    $memoize_fn = $conf->{'memoize'};
+    $memoize_max_size = $conf->{'memoize_max_size'} if $conf->{'memoize_max_size'};
   }
   $conf->{'run'}->($conf);
   die("server returned\n");

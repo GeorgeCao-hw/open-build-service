@@ -29,8 +29,16 @@ class Notification < ApplicationRecord
     event_type.gsub('Event::', '').underscore
   end
 
+  def read?
+    delivered?
+  end
+
   def unread?
-    !delivered?
+    !read?
+  end
+
+  def unread_date
+    last_seen_at || created_at
   end
 end
 
@@ -44,12 +52,12 @@ end
 #  delivered                  :boolean          default(FALSE)
 #  event_payload              :text(65535)      not null
 #  event_type                 :string(255)      not null
+#  last_seen_at               :datetime
 #  notifiable_type            :string(255)      indexed => [notifiable_id]
 #  rss                        :boolean          default(FALSE)
 #  subscriber_type            :string(255)      indexed => [subscriber_id]
 #  subscription_receiver_role :string(255)      not null
 #  title                      :string(255)
-#  type                       :string(255)      default(""), not null
 #  web                        :boolean          default(FALSE)
 #  created_at                 :datetime         not null
 #  updated_at                 :datetime         not null

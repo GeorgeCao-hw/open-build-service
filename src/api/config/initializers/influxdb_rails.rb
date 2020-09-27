@@ -1,11 +1,12 @@
-if CONFIG['influxdb_hosts'].blank? # defaults to localhost otherwise
+# If there are no hosts configured, disable this environment.
+if CONFIG['influxdb_hosts'].blank?
   InfluxDB::Rails.configure do |config|
-    config.instrumentation_enabled = false
+    config.ignored_environments << Rails.env
   end
   return
 end
 InfluxDB::Rails.configure do |config|
-  config.client.database       = CONFIG['influxdb_database'] || 'rails'
+  config.client.database       = CONFIG['influxdb_database'] || 'performance'
   config.client.username       = CONFIG['influxdb_username'] || 'root'
   config.client.password       = CONFIG['influxdb_password'] || 'root'
   config.client.hosts          = CONFIG['influxdb_hosts']

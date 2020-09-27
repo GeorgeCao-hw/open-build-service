@@ -394,7 +394,6 @@ sub mergeservicerun {
   die("package has no service\n") unless $servicemark;
   $files = BSSrcServer::Service::handleservice($rev, $files, $servicemark);
   # merge
-  delete $files->{'_service'};
   for (sort keys %$files) {
     next unless /^_service:.*:(.*?)$/s;
     die("cannot create a link from a service") if $1 eq '_link';
@@ -402,6 +401,20 @@ sub mergeservicerun {
     delete $files->{$_};
     BSSrcrep::copyonefile($projid, $packid, $1, $projid, $packid, $_, $files->{$1});
   }
+
+  # filter services, but the "buildtime" ones
+  my $services = BSRevision::revreadxml($rev, '_service', $files->{'_service'}, $BSXML::services, 1) || {};
+  my @btservices = grep {$_->{'mode'} && $_->{'mode'} eq 'buildtime'} @{$services->{'service'} || []};
+  if (@btservices) {
+    # write services using buildtime back
+    $services->{'service'} = \@btservices;
+    mkdir_p($uploaddir);
+    writexml("$uploaddir/$$", undef, $services, $BSXML::services);
+    $files->{'_service'} = BSSrcrep::addfile($projid, $packid, "$uploaddir/$$", '_service');
+  } else {
+    delete $files->{'_service'}
+  }
+
   $rev = addrev_runservice($cgi, $projid, $packid, $files);
   delete $rev->{'project'};
   delete $rev->{'package'};
@@ -555,6 +568,7 @@ sub addrev {
     die("403 package '$packid' is read-only if a '_product' package exists\n") if -e "$projectsdir/$projid.pkg/_product.xml";
   }
   die("403 package '$packid' is read-only\n") if $packid =~ /(?<!^_product)(?<!^_patchinfo):./;
+  die("_project must not be a link\n") if $packid eq '_project' && $files->{'_link'};
   my $user = $cgi->{'user'};
   my $comment = $cgi->{'comment'};
   my $requestid = $cgi->{'requestid'};
@@ -664,8 +678,11 @@ sub addrev {
       $acceptinfo->{'srcmd5'} = $rev->{'srcmd5'};
       $rev->{'acceptinfo'} = $acceptinfo;
     }
-    notify_repservers('project', $projid);
-    notify("SRCSRV_UPDATE_PROJECT_CONFIG", { "project" => $projid, "files" => $filestr, "comment" => $comment, "sender" => $user });
+    # check if the commit included a project config change
+    if (($files_old->{'_config'} || '') ne ($files->{'_config'} || '')) {
+      notify_repservers('project', $projid);
+      notify("SRCSRV_UPDATE_PROJECT_CONFIG", { "project" => $projid, "files" => $filestr, "comment" => $comment, "sender" => $user });
+    }
     return $rev;
   }
 
@@ -852,6 +869,7 @@ sub findfile {
   return $files{'appimage.yml'} if $files{'appimage.yml'} && $ext eq 'appimage';
   return $files{'Dockerfile'} if $files{'Dockerfile'} && $ext eq 'docker';
   return $files{'fissile.yml'} if $files{'fissile.yml'} && $ext eq 'fissile';
+  return $files{'Chart.yaml'} if $files{'Chart.yaml'} && $ext eq 'helm';
 
   if ($ext eq 'arch') {
     return $files{'PKGBUILD'} if $files{'PKGBUILD'};
@@ -1016,17 +1034,20 @@ sub getprojpack {
       push @$projids, $projid;
     }
   }
+
+  my $limit_projids;
   if ($BSConfig::limit_projects && $BSConfig::limit_projects->{$arch}) {
     my $limit = $BSConfig::limit_projects->{$arch};
     if ($BSConfig::limit_projects_use_regex || $BSConfig::limit_projects_use_regex) {
+      $limit_projids = {};
       for my $projid (splice @$projids) {
-        push @$projids, $projid if grep {$projid =~ /^$_$/} @$limit;
+	$limit_projids->{$projid} = 1 if grep {$projid =~ /^$_$/} @$limit;
       }
     } else {
-      my %limit_projids = map {$_ => 1} @$limit;
-      $projids = [ grep {$limit_projids{$_}} @$projids ];
+      $limit_projids = { map {$_ => 1} @$limit };
     }
   }
+
   $repoids = { map {$_ => 1} @$repoids } if $repoids;
   $packids = { map {$_ => 1} @$packids } if $packids;
   my $bconf = Build::read_config($arch);
@@ -1076,6 +1097,9 @@ sub getprojpack {
       $jinfo->{$_} = $proj->{$_} if exists $proj->{$_};
     }
 
+    my $is_limited;
+    $is_limited = 1 if $limit_projids && !$limit_projids->{$projid};
+
     my %expandedrepos;
 
     if ($cgi->{'withrepos'}) {
@@ -1096,7 +1120,7 @@ sub getprojpack {
 	  $repo->{'path'} = \@prps;
 	  $repo->{'base'} = $base;
 	}
-      } elsif ($remotemap) {
+      } elsif ($remotemap && !$is_limited) {
 	# we always need the expanded search path with the configs so that
 	# we know about the publishfilter
 	for my $repo (@{$jinfo->{'repository'}}) {
@@ -1138,7 +1162,7 @@ sub getprojpack {
       }
     }
 
-    if ($remotemap) {
+    if ($remotemap && !$is_limited) {
       for my $lprojid (map {$_->{'project'}} @{$proj->{'link'} || []}) {
         my $lproj = BSSrcServer::Remote::remoteprojid($lprojid);
 	eval {
@@ -1170,7 +1194,7 @@ sub getprojpack {
       };
     }
     my @packages;
-    if ($cgi->{'nopackages'}) {
+    if ($cgi->{'nopackages'} || $is_limited) {
       @packages = ();
     } elsif ($proj->{'remoteurl'}) {
       @packages = @{$cgi->{'package'}} if $cgi->{'package'} && $cgi->{'parseremote'};
@@ -1241,6 +1265,10 @@ sub getprojpack {
       @packages = ();
     }
     @packages = () if $cgi->{'nopackages'};
+    if ($is_limited) {
+      @packages = ();
+      $jinfo->{'error'} = 'forbidden for this architecture';
+    }
     my @pinfo;
     my %bconfs;
 
@@ -1763,7 +1791,16 @@ sub getprojpack {
 
 sub getprojectlist {
   my ($cgi) = @_;
-  my @projects = findprojects($cgi->{'deleted'});
+  my @projects;
+  my %projids = map {$_ => 1} @{$cgi->{'project'} || []};
+  if (%projids && !$cgi->{'deleted'}) {
+    for my $projid (sort keys %projids) {
+      push @projects, $projid if -s "$projectsdir/$projid.xml";
+    }
+  } else {
+    @projects = findprojects($cgi->{'deleted'});
+    @projects = grep {$projids{$_}} @projects if %projids;
+  }
   @projects = map {{'name' => $_}} @projects;
   return ({'entry' => \@projects}, $BSXML::dir);
 }
@@ -1800,6 +1837,7 @@ sub updatesslcert {
   my $files = BSRevision::lsrev($rev);
   return undef unless $files->{'_sslcert'};
   my $cert = BSSrcServer::Signkey::pubkey2sslcert($projid, $pubkeyfile, $signkeyfile);
+  die("empty cert\n") unless $cert;
   mkdir_p($uploaddir);
   writestr("$uploaddir/sslcert.$$", undef, $cert);
   return "$uploaddir/sslcert.$$";
@@ -1836,6 +1874,18 @@ sub extendkey {
   my $certfile = updatesslcert($projid, "$uploaddir/pubkey.$$", "$projectsdir/$projid.pkg/_signkey");
   BSRevision::addrev_meta_replace($cgi, $projid, undef,
 	[ "$uploaddir/pubkey.$$",  "$projectsdir/$projid.pkg/_pubkey",  '_pubkey' ],
+	[ $certfile, undef, '_sslcert' ]);
+  return $BSStdServer::return_ok;
+}
+
+sub recreatesslcert {
+  my ($cgi, $projid) = @_;
+  $cgi->{'comment'} ||= 'recreate cert';
+  die("project does not have a key\n") unless -s "$projectsdir/$projid.pkg/_pubkey";
+  die("project does not have a signkey\n") unless -s "$projectsdir/$projid.pkg/_signkey";
+  my $certfile = updatesslcert($projid, "$projectsdir/$projid.pkg/_pubkey", "$projectsdir/$projid.pkg/_signkey");
+  die("could not update cert\n") unless $certfile;
+  BSRevision::addrev_meta_replace($cgi, $projid, undef,
 	[ $certfile, undef, '_sslcert' ]);
   return $BSStdServer::return_ok;
 }
@@ -2793,6 +2843,22 @@ sub getsourcediffcache {
   die("cache entry '$cacheid' does not exist\n");
 }
 
+sub cleandiffcache {
+  my ($cacheid, $thr) = @_;
+  my $now = time();
+  my $slot = substr($cacheid, 0, 2);
+  my $dir = "$diffcache/$slot";
+  my $cnt = 0;
+  for my $e (sort(ls($dir))) {
+     next unless $e =~ /^[0-9a-f]{32}$/;
+     my @s = stat("$dir/$e");
+     next if $s[9] > $now - $thr;
+     unlink("$dir/$e");
+     $cnt++;
+  }
+  print "cleandiffcache: removed $cnt entries in slot $slot\n";
+}
+
 sub sourcediff {
   my ($cgi, $projid, $packid) = @_;
 
@@ -3000,7 +3066,11 @@ sub sourcediff {
     unlink("$cn.run");
     close LF;
   }
-  return ($d, $view eq 'xml' ? 'Content-Type: text/xml' : 'Content-Type: text/plain');
+  BSServer::reply($d, $view eq 'xml' ? 'Content-Type: text/xml' : 'Content-Type: text/plain');
+  undef $d;
+  BSServer::done(1);
+  cleandiffcache($cacheid, 86400 * 100) if $cn && substr($cacheid, -2, 2) eq '00';
+  return undef;
 }
 
 sub linkdiff {
@@ -4069,6 +4139,14 @@ sub getpackagelist_build {
       if (!$BSStdServer::isajax) {
 	BSHandoff::handoff("/build/$projid/$repoid/$arch", undef, @args);
       }
+      if (@{$cgi->{'package'} || []} && ($view eq 'binaryversions' || $view eq 'binaryversionscode')) {
+	my $pbvl = BSSrcServer::Remote::getpackagebinaryversionlist($proj, $projid, $repoid, $arch, $cgi->{'package'}, $view);
+	return ($pbvl, $BSXML::packagebinaryversionlist);
+      }
+      if (@{$cgi->{'package'} || []} && $view eq 'binarychecksums') {
+	my $pbc = BSSrcServer::Remote::getpackagebinaryversionlist($proj, $projid, $repoid, $arch, $cgi->{'package'}, $view);
+	return ($pbc, $BSXML::packagebinarychecksums);
+      }
       $param->{'uri'} = "$proj->{'remoteurl'}/build/$proj->{'remoteproject'}/$repoid/$arch";
       $param->{'proxy'} = $proxy;
     }
@@ -4464,6 +4542,7 @@ sub add_localworkerstatus {
   return $ws if $cgi->{'arch'} && !grep {$_ eq $type} @{$cgi->{'arch'}};
   return $ws if $type eq 'servicedispatch' && !$BSConfig::servicedispatch;
   return $ws if $type eq 'redis' && !$BSConfig::redisserver;
+  return $ws if $type eq 'sourcepublish' && !$BSConfig::sourcepublish_sync;
   return $ws if $type ne 'srcserver' && ! -e $lock;
   my $daemondata = {'state' => 'dead', 'type' => $type};
   if ($type eq 'srcserver') {
@@ -4552,6 +4631,7 @@ sub getworkerstatus {
     add_localworkerstatus($cgi, $ws, 'deltastore', "$rundir/bs_deltastore.lock");
     add_localworkerstatus($cgi, $ws, 'servicedispatch', "$rundir/bs_servicedispatch.lock");
     add_localworkerstatus($cgi, $ws, 'redis', "$rundir/bs_redis.lock");
+    add_localworkerstatus($cgi, $ws, 'sourcepublish', "$rundir/bs_sourcepublish.lock");
     add_localworkerstatus($cgi, $ws, 'srcserver');
     return ($ws, $BSXML::workerstatus);
   }
@@ -4638,6 +4718,7 @@ sub getworkerstatus {
   add_localworkerstatus($cgi, $cws, 'deltastore', "$rundir/bs_deltastore.lock");
   add_localworkerstatus($cgi, $cws, 'servicedispatch', "$rundir/bs_servicedispatch.lock");
   add_localworkerstatus($cgi, $cws, 'redis', "$rundir/bs_redis.lock");
+  add_localworkerstatus($cgi, $cws, 'sourcepublish', "$rundir/bs_sourcepublish.lock");
   add_localworkerstatus($cgi, $cws, 'srcserver');
   return ($cws, $BSXML::workerstatus);
 }
@@ -5460,11 +5541,13 @@ sub getsslcert {
     my $cert = projid2sslcert($skprojid, $sk, $projid, 0, $signtype);
     return ($cert, 'Content-Type: text/plain');
   }
+  my $cert;
   if ($BSConfig::sign_project && $BSConfig::sign) {
-    my $cert = BSSrcServer::Signkey::getdefaultcert($projid, $signtype);
-    return ($cert, 'Content-Type: text/plain') if $cert;
+    $cert = BSSrcServer::Signkey::getdefaultcert($projid, $signtype);
+  } elsif ($BSConfig::certfile) {
+    $cert = readstr($BSConfig::certfile, 1);
   }
-  return ('', 'Content-Type: text/plain');
+  return ($cert || '', 'Content-Type: text/plain');
 }
 
 sub getkeyinfo {
@@ -5487,6 +5570,8 @@ sub getkeyinfo {
     } else {
       $cert = BSSrcServer::Signkey::getdefaultcert($projid, $signtype);
     }
+  } elsif ($cgi->{'withsslcert'} && !$skprojid && $BSConfig::certfile) {
+    $cert = readstr($BSConfig::certfile, 1);
   }
   if (!$pk && $BSConfig::sign_project && $BSConfig::sign) {
     $pk = BSSrcServer::Signkey::getdefaultpubkey($projid);
@@ -6344,6 +6429,20 @@ sub external_notification_sourcepublish {
       push @included, { 'project' => $iproject, 'package' => $ipackage, 'srcmd5' => $imd5 };
     }
 
+    if ($BSConfig::sourcepublish_blocklist) {
+      my $xml = readxml("$projectsdir/$project.xml", $BSXML::proj, 1);
+      die("400 Unable to parse $project.xml\n") unless $xml;
+      if ( {$xml->{'kind'} || ''} eq 'maintenance_release' ) {
+        if (grep {$package =~ /^$_\./} @$BSConfig::sourcepublish_blocklist) {
+          BSUtil::printlog("block list hit for $package in maintenance release project");
+          return;
+        }
+      } elsif (grep {$package eq $_} @$BSConfig::sourcepublish_blocklist) {
+        BSUtil::printlog("block list hit for $package");
+        return;
+      }
+    }
+
     my $evname = "${project}::${package}::${md5}";
     my $ev = { 'type' => "sourcepublish" };
     $ev->{'project'} = $project;
@@ -6837,10 +6936,11 @@ my $dispatches = [
   'POST:/source cmd: *:*' => \&unknowncmd,
 
   # /source name space: manage project and package data
-  '/source deleted:bool?' => \&getprojectlist,
+  '/source deleted:bool? project*' => \&getprojectlist,
 
   'POST:/source/$project cmd=createkey user:? comment:?' => \&createkey,
   'POST:/source/$project cmd=extendkey user:? comment:?' => \&extendkey,
+  'POST:/source/$project cmd=recreatesslcert user:? comment:?' => \&recreatesslcert,
   'POST:/source/$project cmd=undelete user:? comment:?' => \&undeleteproject,
   'POST:/source/$project cmd=copy user:? comment:? oproject:project withbinaries:bool? withhistory:bool? makeolder:bool? makeoriginolder:bool? resign:bool? noservice:bool?' => \&copyproject,
   'POST:/source/$project cmd=move oproject:project' => \&moveproject,

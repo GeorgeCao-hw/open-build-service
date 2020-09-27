@@ -4,7 +4,7 @@ require 'nokogiri'
 # and start a test backend. Some of the BsRequestAction methods
 # require real backend answers for projects/packages.
 # CONFIG['global_write_through'] = true
-RSpec.describe BsRequest, vcr: true do
+RSpec.describe BsRequest do
   let(:user) { create(:confirmed_user, :with_home, login: 'tux') }
   let(:target_project) { create(:project, name: 'target_project') }
   let(:source_project) { create(:project, :as_submission_source, name: 'source_project') }
@@ -228,6 +228,7 @@ RSpec.describe BsRequest, vcr: true do
       end
       let!(:relationship_project_user) { create(:relationship_project_user, project: target_project) }
       let(:user) { relationship_project_user.user }
+
       before do
         login user
         request.state = 'accepted'
@@ -269,7 +270,7 @@ RSpec.describe BsRequest, vcr: true do
 
       it { expect(bs_request.staging_project).to be_present }
 
-      context 'when a staged bs_request is accepted' do
+      context 'when a staged bs_request is accepted', vcr: true do
         let(:backend_response) do
           <<~XML
             <revision rev="12" vrev="12">
@@ -283,6 +284,7 @@ RSpec.describe BsRequest, vcr: true do
             </revision>
           XML
         end
+
         before do
           allow(Backend::Api::Sources::Package).to receive(:copy).and_return(backend_response)
           bs_request.change_review_state(:accepted, by_project: staging_project.name, comment: 'accepted')
@@ -377,7 +379,7 @@ RSpec.describe BsRequest, vcr: true do
     context "when there is no action with type 'submit'" do
       let(:request_actions) do
         [
-          { type: :foo, sourcediff: ['files' => [['./my_file', { 'diff' => { 'shown' => '200' } }]]] },
+          { type: :foo, sourcediff: [{ 'files' => [['./my_file', { 'diff' => { 'shown' => '200' } }]] }] },
           { type: 'bar' }
         ]
       end
@@ -388,7 +390,7 @@ RSpec.describe BsRequest, vcr: true do
     context 'when there is no sourcediff' do
       let(:request_actions) do
         [
-          { type: :foo, sourcediff: ['files' => [['./my_file', { 'diff' => { 'shown' => '200' } }]]] },
+          { type: :foo, sourcediff: [{ 'files' => [['./my_file', { 'diff' => { 'shown' => '200' } }]] }] },
           { type: :submit }
         ]
       end
@@ -409,7 +411,7 @@ RSpec.describe BsRequest, vcr: true do
 
     context 'when the diff is at least one diff that has a shown attribute' do
       let(:request_actions) do
-        [{ type: :submit, sourcediff: ['files' => [['./my_file', { 'diff' => { 'shown' => '200' } }]]] }]
+        [{ type: :submit, sourcediff: [{ 'files' => [['./my_file', { 'diff' => { 'shown' => '200' } }]] }] }]
       end
 
       it { expect(BsRequest.truncated_diffs?(request_actions)).to eq(true) }
@@ -417,7 +419,7 @@ RSpec.describe BsRequest, vcr: true do
 
     context 'when none of the diffs has a shown attribute' do
       let(:request_actions) do
-        [{ type: :submit, sourcediff: ['files' => [['./my_file', { 'diff' => { 'rev' => '1' } }]]] }]
+        [{ type: :submit, sourcediff: [{ 'files' => [['./my_file', { 'diff' => { 'rev' => '1' } }]] }] }]
       end
 
       it { expect(BsRequest.truncated_diffs?(request_actions)).to eq(false) }
@@ -425,7 +427,7 @@ RSpec.describe BsRequest, vcr: true do
 
     context "when there is a sourcediff attribute with no 'files'" do
       let(:request_actions) do
-        [{ type: :submit, sourcediff: ['other_data' => 'foo'] }]
+        [{ type: :submit, sourcediff: [{ 'other_data' => 'foo' }] }]
       end
 
       it { expect(BsRequest.truncated_diffs?(request_actions)).to eq(false) }
@@ -448,7 +450,7 @@ RSpec.describe BsRequest, vcr: true do
       request.update(accept_at: 1.hour.ago)
     end
 
-    describe '.delayed_auto_accept' do
+    describe '.delayed_auto_accept', vcr: true do
       subject! { BsRequest.delayed_auto_accept }
 
       it { is_expected.to contain_exactly(request) }
@@ -456,7 +458,7 @@ RSpec.describe BsRequest, vcr: true do
     end
 
     describe '#auto_accept' do
-      context 'when the request is pending' do
+      context 'when the request is pending', vcr: true do
         subject! { request.auto_accept }
 
         it { expect(request.reload).to have_attributes(state: :accepted, comment: 'Auto accept') }
@@ -473,7 +475,7 @@ RSpec.describe BsRequest, vcr: true do
         it { expect(request.reload).not_to have_attributes(state: :accepted, comment: 'Auto accept') }
       end
 
-      context "when creator doesn't have permissions for the target project" do
+      context "when creator doesn't have permissions for the target project", vcr: true do
         subject { request.auto_accept }
 
         before do
@@ -530,7 +532,7 @@ RSpec.describe BsRequest, vcr: true do
     end
   end
 
-  describe '#forward_to' do
+  describe '#forward_to', vcr: true do
     before do
       submit_request.bs_request_actions.first.update(sourceupdate: 'cleanup')
       login user
@@ -580,6 +582,7 @@ RSpec.describe BsRequest, vcr: true do
 
     context 'with options' do
       before do
+        login(user)
         # For submit requests with 'sourceupdate' the user needs to be able to modify the (forwarded) source package
         target_package.relationships.create(user: user, role: Role.find_by_title!('maintainer'))
       end
@@ -606,7 +609,7 @@ RSpec.describe BsRequest, vcr: true do
     include_context 'a BsRequest that has a project link'
 
     context 'via #new' do
-      context 'when sourceupdate is not set to cleanup' do
+      context 'when sourceupdate is not set to cleanup', vcr: true do
         include_context 'when sourceupdate is set to' do
           let(:sourceupdate_type) { 'cleanup' }
         end
@@ -614,7 +617,7 @@ RSpec.describe BsRequest, vcr: true do
         it { expect { subject.save! }.to raise_error BsRequestAction::LackingMaintainership }
       end
 
-      context 'when sourceupdate is not set to update' do
+      context 'when sourceupdate is not set to update', vcr: true do
         include_context 'when sourceupdate is set to' do
           let(:sourceupdate_type) { 'update' }
         end
@@ -622,7 +625,7 @@ RSpec.describe BsRequest, vcr: true do
         it { expect { subject.save! }.to raise_error BsRequestAction::LackingMaintainership }
       end
 
-      context 'when sourceupdate is set to noupdate' do
+      context 'when sourceupdate is set to noupdate', vcr: true do
         include_context 'when sourceupdate is set to' do
           let(:sourceupdate_type) { 'noupdate' }
         end
@@ -630,7 +633,7 @@ RSpec.describe BsRequest, vcr: true do
         it { expect { subject.save! }.not_to raise_error }
       end
 
-      context 'when sourceupdate is not set' do
+      context 'when sourceupdate is not set', vcr: true do
         include_context 'when sourceupdate is set to' do
           let(:sourceupdate_type) { nil }
         end
@@ -639,7 +642,7 @@ RSpec.describe BsRequest, vcr: true do
       end
     end
 
-    context 'via #new_from_xml' do
+    context 'via #new_from_xml', vcr: true do
       subject { BsRequest.new_from_xml(xml) }
 
       it { expect { subject.save! }.to raise_error BsRequestAction::LackingMaintainership }

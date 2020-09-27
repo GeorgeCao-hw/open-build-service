@@ -33,8 +33,6 @@ gem 'cocoon'
 gem 'acts_as_list'
 # to parse a XML string into a ruby hash
 gem 'xmlhash', '>=1.3.6'
-# to escape HTML (FIXME: do we still use this?)
-gem 'escape_utils'
 # as authorization system
 gem 'pundit'
 # for password hashing
@@ -43,8 +41,6 @@ gem 'bcrypt'
 gem 'acts_as_tree'
 # js plotting (OBS monitor)
 gem 'flot-rails'
-# colorize for scripts
-gem 'colorize', require: false
 # XML Serialization got moved here
 gem 'activemodel-serializers-xml'
 # Spider Identification
@@ -65,7 +61,7 @@ gem 'addressable'
 # for XML builder
 gem 'builder'
 # to write the rails metrics directly into InfluxDB.
-gem 'influxdb-rails', '1.0.0'
+gem 'influxdb-rails', '1.0.1.beta2'
 # for copying objects with their relations
 gem 'deep_cloneable', '~> 3.0.0'
 # Server-side datatables
@@ -174,8 +170,6 @@ group :development, :test do
   gem 'puma'
   # to drive headless chrome
   gem 'selenium-webdriver'
-  # scan for security vulnerability (circleci only, do not touch)
-  # BRAKEMAN
 end
 
 group :development do

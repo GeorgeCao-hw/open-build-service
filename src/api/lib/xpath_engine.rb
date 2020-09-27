@@ -257,13 +257,9 @@ class XpathEngine
     end
     # logger.debug "starting stack: #{@stack.inspect}"
 
-    if @stack.shift != :document
-      raise IllegalXpathError, 'xpath expression has to begin with root node'
-    end
+    raise IllegalXpathError, 'xpath expression has to begin with root node' if @stack.shift != :document
 
-    if @stack.shift != :child
-      raise IllegalXpathError, 'xpath expression has to begin with root node'
-    end
+    raise IllegalXpathError, 'xpath expression has to begin with root node' if @stack.shift != :child
 
     @stack.shift
     @stack.shift
@@ -282,9 +278,7 @@ class XpathEngine
       when :self
         raise IllegalXpathError, "axis '#{token}' not supported"
       when :child
-        if @stack.shift != :qname
-          raise IllegalXpathError, "non :qname token after :child token: #{token.inspect}"
-        end
+        raise IllegalXpathError, "non :qname token after :child token: #{token.inspect}" if @stack.shift != :qname
 
         @stack.shift # namespace
         @stack.shift # node
@@ -316,7 +310,7 @@ class XpathEngine
       @joins = ['LEFT JOIN relationships user_relation ON projects.id = user_relation.project_id',
                 'LEFT JOIN relationships group_relation ON projects.id = group_relation.project_id'] << @joins
     when 'repositories'
-      relation = Repository.where('repositories.db_project_id not in (?)', Relationship.forbidden_project_ids)
+      relation = Repository.where.not('repositories.db_project_id' => Relationship.forbidden_project_ids)
       @joins = ['LEFT join path_elements path_element on path_element.parent_id=repositories.id',
                 'LEFT join repositories path_repo on path_element.repository_id=path_repo.id',
                 'LEFT join release_targets release_target on release_target.repository_id=repositories.id',
@@ -359,9 +353,7 @@ class XpathEngine
       logger.debug "strange base table: #{@base_table}"
     end
     cond_ary = nil
-    if @conditions.count > 0
-      cond_ary = [@conditions.flatten.uniq.join(' AND '), @condition_values].flatten
-    end
+    cond_ary = [@conditions.flatten.uniq.join(' AND '), @condition_values].flatten if @conditions.count.positive?
 
     logger.debug("#{relation.to_sql}.find #{{ joins: @joins.flatten.uniq.join(' '),
                                               conditions: cond_ary }.inspect}")
@@ -382,14 +374,13 @@ class XpathEngine
       when :function
         fname = stack.shift
         fname_int = 'xpath_func_' + fname.tr('-', '_')
-        unless respond_to?(fname_int)
-          raise IllegalXpathError, "unknown xpath function '#{fname}'"
-        end
+        raise IllegalXpathError, "unknown xpath function '#{fname}'" unless respond_to?(fname_int)
 
         __send__(fname_int, root, *stack.shift)
       when :child
         qtype = stack.shift
-        if qtype == :qname
+        case qtype
+        when :qname
           stack.shift
           root << stack.shift
           qtype = stack.shift
@@ -404,7 +395,7 @@ class XpathEngine
             parse_predicate(root, qtype)
           end
           root.pop
-        elsif qtype == :any
+        when :any
           # noop, already shifted
         else
           raise IllegalXpathError, "unhandled token '#{t.inspect}'"
@@ -412,9 +403,7 @@ class XpathEngine
       when *@operators
         opname = token.to_s
         opname_int = 'xpath_op_' + opname
-        unless respond_to?(opname_int)
-          raise IllegalXpathError, "unhandled xpath operator '#{opname}'"
-        end
+        raise IllegalXpathError, "unhandled xpath operator '#{opname}'" unless respond_to?(opname_int)
 
         __send__(opname_int, root, *stack)
         stack = []
@@ -448,9 +437,7 @@ class XpathEngine
 
         if @last_key && @attribs[table][@last_key][:split]
           tvalues = value.split(@attribs[table][@last_key][:split])
-          if tvalues.size != 2
-            raise XpathEngine::IllegalXpathError, 'attributes must be $NAMESPACE:$NAME'
-          end
+          raise XpathEngine::IllegalXpathError, 'attributes must be $NAMESPACE:$NAME' if tvalues.size != 2
 
           @condition_values_needed.times { @condition_values << tvalues }
         elsif @last_key && @attribs[table][@last_key][:double]
@@ -487,11 +474,11 @@ class XpathEngine
     lval = evaluate_expr(lv, root)
     rval = evaluate_expr(rv, root)
 
-    if lval.nil? || rval.nil?
-      condition = '0'
-    else
-      condition = "#{lval} = #{rval}"
-    end
+    condition = if lval.nil? || rval.nil?
+                  '0'
+                else
+                  "#{lval} = #{rval}"
+                end
     # logger.debug "-- condition: [#{condition}]"
 
     @conditions << condition
@@ -503,11 +490,11 @@ class XpathEngine
     lval = evaluate_expr(lv, root)
     rval = evaluate_expr(rv, root)
 
-    if lval.nil? || rval.nil?
-      condition = '1'
-    else
-      condition = "#{lval} != #{rval}"
-    end
+    condition = if lval.nil? || rval.nil?
+                  '1'
+                else
+                  "#{lval} != #{rval}"
+                end
 
     # logger.debug "-- condition: [#{condition}]"
 
@@ -563,13 +550,13 @@ class XpathEngine
     parse_predicate(root, rv)
     rv_cond = @conditions.pop
 
-    if lv_cond == '0'
-      condition = rv_cond
-    elsif rv_cond == '0'
-      condition = lv_cond
-    else
-      condition = "((#{lv_cond}) OR (#{rv_cond}))"
-    end
+    condition = if lv_cond == '0'
+                  rv_cond
+                elsif rv_cond == '0'
+                  lv_cond
+                else
+                  "((#{lv_cond}) OR (#{rv_cond}))"
+                end
     # logger.debug "-- condition: [#{condition}]"
 
     @conditions << condition
@@ -581,11 +568,11 @@ class XpathEngine
     hs = evaluate_expr(haystack, root)
     ne = evaluate_expr(needle, root, true)
 
-    if hs.nil? || ne.nil?
-      condition = '0'
-    else
-      condition = "LOWER(#{hs}) LIKE LOWER(CONCAT('%',#{ne},'%'))"
-    end
+    condition = if hs.nil? || ne.nil?
+                  '0'
+                else
+                  "LOWER(#{hs}) LIKE LOWER(CONCAT('%',#{ne},'%'))"
+                end
     # logger.debug "-- condition : [#{condition}]"
 
     @conditions << condition

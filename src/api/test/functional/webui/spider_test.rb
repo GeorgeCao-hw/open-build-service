@@ -30,9 +30,9 @@ class Webui::SpiderTest < Webui::IntegrationTest
 
   def getlinks(baseuri, body)
     # skip some uninteresting projects
-    return if baseuri =~ %r{project=home%3Afred}
-    return if baseuri =~ %r{project=home%3Acoolo}
-    return if baseuri =~ %r{project=deleted}
+    return if baseuri =~ /project=home%3Afred/
+    return if baseuri =~ /project=home%3Acoolo/
+    return if baseuri =~ /project=deleted/
 
     baseuri = URI.parse(baseuri)
 
@@ -115,13 +115,9 @@ class Webui::SpiderTest < Webui::IntegrationTest
       next unless body
 
       flashes = body.css('div#flash div.alert-error')
-      unless flashes.empty?
-        raiseit("flash alert #{flashes.first.content.strip}", theone)
-      end
+      raiseit("flash alert #{flashes.first.content.strip}", theone) unless flashes.empty?
       body.css('h1').each do |h|
-        if h.content == 'Internal Server Error'
-          raiseit('Internal Server Error', theone)
-        end
+        raiseit('Internal Server Error', theone) if h.content == 'Internal Server Error'
       end
       body.css('h2').each do |h|
         raiseit('XML errors', theone) if h.content == 'XML errors'

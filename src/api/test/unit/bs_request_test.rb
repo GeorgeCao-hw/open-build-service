@@ -33,7 +33,7 @@ class BsRequestTest < ActiveSupport::TestCase
     req = bs_requests(:missing_source_project)
 
     assert req.is_target_maintainer?(users(:adrian))
-    assert !req.is_target_maintainer?(users(:user1))
+    assert_not req.is_target_maintainer?(users(:user1))
   end
 
   def test_incremental_request_numbers
@@ -141,10 +141,13 @@ class BsRequestTest < ActiveSupport::TestCase
   end
 
   def test_if_delegate_works
+    # ensure that update project lacks the package to cover update_instance delegation as well
+    assert Package.find_by_project_and_name('BaseDistro:Update', 'pack1').nil?
+
     xml = '<request>
               <action type="submit">
                 <source project="BaseDistro3" package="pack2"/>
-                <target project="BaseDistro:SP1"/>
+                <target project="BaseDistro:SP1" package="pack1"/>
               </action>
               <state name="new" />
           </request>'

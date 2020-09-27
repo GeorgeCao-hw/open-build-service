@@ -4,6 +4,7 @@ require 'rexml/document'
 
 # rubocop: disable Metrics/ClassLength
 class Package < ApplicationRecord
+  include AppendSphinxCallbacks
   include FlagHelper
   include Flag::Validations
   include CanRenderModel
@@ -11,7 +12,6 @@ class Package < ApplicationRecord
   include Package::Errors
   include HasRatings
   include HasAttributes
-  include PopulateSphinx
   include PackageSphinx
 
   BINARY_EXTENSIONS = ['.0', '.bin', '.bin_mid', '.bz', '.bz2', '.ccf', '.cert',
@@ -61,6 +61,7 @@ class Package < ApplicationRecord
   has_many :target_of_bs_request_actions, class_name: 'BsRequestAction', foreign_key: 'target_package_id'
   has_many :target_of_bs_requests, through: :target_of_bs_request_actions, source: :bs_request
 
+  before_update :update_activity
   before_destroy :delete_on_backend
   before_destroy :close_requests
   before_destroy :update_project_for_product
@@ -68,8 +69,6 @@ class Package < ApplicationRecord
   before_destroy :remove_devel_packages
 
   after_save :write_to_backend
-  after_save :populate_sphinx, if: -> { name_previously_changed? || title_previously_changed? || description_previously_changed? }
-  before_update :update_activity
   after_rollback :reset_cache
 
   # The default scope is necessary to exclude the forbidden projects.
@@ -125,11 +124,11 @@ class Package < ApplicationRecord
     @key[:user] = User.session.cache_key_with_version if User.session
 
     # the cache is only valid if the user, prj and pkg didn't change
-    if project.is_a?(Project)
-      @key[:project] = project.id
-    else
-      @key[:project] = project
-    end
+    @key[:project] = if project.is_a?(Project)
+                       project.id
+                     else
+                       project
+                     end
     pid, old_pkg_time, old_prj_time = Rails.cache.read(@key)
     if pid
       pkg = Package.where(id: pid).includes(:project).first
@@ -137,7 +136,7 @@ class Package < ApplicationRecord
 
       Rails.cache.delete(@key) # outdated anyway
     end
-    return
+    nil
   end
 
   def self.internal_get_project(project)
@@ -214,9 +213,7 @@ class Package < ApplicationRecord
     rescue Project::UnknownObjectError
       return false
     end
-    unless prj.is_a?(Project)
-      return opts[:allow_remote_packages] && exists_on_backend?(package, project)
-    end
+    return opts[:allow_remote_packages] && exists_on_backend?(package, project) unless prj.is_a?(Project)
 
     prj.exists_package?(package, opts)
   end
@@ -258,9 +255,7 @@ class Package < ApplicationRecord
   def check_source_access!
     return if check_source_access?
     # TODO: Use pundit for authorization instead
-    unless User.session
-      raise Authenticator::AnonymousUser, 'Anonymous user is not allowed here - please login'
-    end
+    raise Authenticator::AnonymousUser, 'Anonymous user is not allowed here - please login' unless User.session
 
     raise ReadSourceAccessError, "#{project.name}/#{name}"
   end
@@ -320,6 +315,7 @@ class Package < ApplicationRecord
     /\A_product:\w[-+\w.]*\z/.match?(name) && project.packages.with_product_name.exists?
   end
 
+  # FIXME: Rely on pundit policies instead of this
   def can_be_modified_by?(user, ignore_lock = nil)
     user.can_modify?(master_product_object, ignore_lock)
   end
@@ -415,11 +411,11 @@ class Package < ApplicationRecord
 
     # mark the backend infos "dirty"
     BackendPackage.where(package_id: id).delete_all
-    if dir_xml.is_a?(Net::HTTPSuccess)
-      dir_xml = dir_xml.body
-    else
-      dir_xml = source_file(nil)
-    end
+    dir_xml = if dir_xml.is_a?(Net::HTTPSuccess)
+                dir_xml.body
+              else
+                source_file(nil)
+              end
     private_set_package_kind(Xmlhash.parse(dir_xml))
     update_project_for_product
     if opts[:wait_for_update]
@@ -432,7 +428,7 @@ class Package < ApplicationRecord
       rescue ActiveRecord::StatementInvalid
         # mysql lock errors in delayed job handling... we need to retry
         retries -= 1
-        retry if retries > 0
+        retry if retries.positive?
       end
     end
   end
@@ -477,7 +473,7 @@ class Package < ApplicationRecord
   end
 
   def is_of_kind?(kind)
-    package_kinds.where(kind: kind).exists?
+    package_kinds.exists?(kind: kind)
   end
 
   def ignored_requests
@@ -601,7 +597,7 @@ class Package < ApplicationRecord
     Product.transaction do
       begin
         xml = Xmlhash.parse(Backend::Connection.get(source_path(nil, view: :products)).body)
-      rescue
+      rescue StandardError
         return
       end
       xml.elements('productdefinition') do |pd|
@@ -649,9 +645,7 @@ class Package < ApplicationRecord
     prj_name = pkg.project.name
     processed = {}
 
-    if pkg == pkg.develpackage
-      raise CycleError, 'Package defines itself as devel package'
-    end
+    raise CycleError, 'Package defines itself as devel package' if pkg == pkg.develpackage
 
     while pkg.develpackage || pkg.project.develproject
       # logger.debug "resolve_devel_package #{pkg.inspect}"
@@ -698,14 +692,10 @@ class Package < ApplicationRecord
         prj_name = devel['project'] || xmlhash['project']
         pkg_name = devel['package'] || xmlhash['name']
         develprj = Project.find_by_name(prj_name)
-        unless develprj
-          raise SaveError, "value of develproject has to be a existing project (project '#{prj_name}' does not exist)"
-        end
+        raise SaveError, "value of develproject has to be a existing project (project '#{prj_name}' does not exist)" unless develprj
 
         develpkg = develprj.packages.find_by_name(pkg_name)
-        unless develpkg
-          raise SaveError, "value of develpackage has to be a existing package (package '#{pkg_name}' does not exist)"
-        end
+        raise SaveError, "value of develpackage has to be a existing package (package '#{pkg_name}' does not exist)" unless develpkg
 
         self.develpackage = develpkg
       end
@@ -786,9 +776,7 @@ class Package < ApplicationRecord
       end
       logger.tagged('backend_sync') { logger.warn("Deleted Package #{project.name}/#{name}") }
     elsif @commit_opts[:no_backend_write]
-      unless @commit_opts[:project_destroy_transaction]
-        logger.tagged('backend_sync') { logger.warn "Not deleting Package #{project.name}/#{name}, backend_write is off " }
-      end
+      logger.tagged('backend_sync') { logger.warn "Not deleting Package #{project.name}/#{name}, backend_write is off " } unless @commit_opts[:project_destroy_transaction]
     else
       logger.tagged('backend_sync') { logger.warn "Not deleting Package #{project.name}/#{name}, global_write_through is off" }
     end
@@ -828,13 +816,13 @@ class Package < ApplicationRecord
     # rubocop:disable Layout/LineLength
     rel = rel.where('(bs_request_actions.source_project = ? and bs_request_actions.source_package = ?) or (bs_request_actions.target_project = ? and bs_request_actions.target_package = ?)', project.name, name, project.name, name)
     # rubocop:enable Layout/LineLength
-    BsRequest.where(id: rel.pluck('bs_requests.id'))
+    BsRequest.where(id: rel.select('bs_requests.id'))
   end
 
   def open_requests_with_by_package_review
     rel = BsRequest.where(state: [:new, :review])
     rel = rel.joins(:reviews).where("reviews.state = 'new' and reviews.by_project = ? and reviews.by_package = ? ", project.name, name)
-    BsRequest.where(id: rel.pluck('bs_requests.id'))
+    BsRequest.where(id: rel.select('bs_requests.id'))
   end
 
   def self.extended_name(project, package)
@@ -899,9 +887,7 @@ class Package < ApplicationRecord
     # local link, go one step deeper
     prj = Project.get_by_name(linkinfo['project'])
     pkg = prj.find_package(linkinfo['package'])
-    if !options[:local] && project != prj && !prj.is_maintenance_incident?
-      return pkg
-    end
+    return pkg if !options[:local] && project != prj && !prj.is_maintenance_incident?
 
     # If package is nil it's either broken or a remote one.
     # Otherwise we continue
@@ -988,9 +974,7 @@ class Package < ApplicationRecord
     # rubocop:enable Rails/SkipsModelValidations
 
     # and all possible existing local links
-    if opkg.project.is_maintenance_release? && opkg.is_link?
-      opkg = opkg.project.packages.find_by_name(opkg.linkinfo['package'])
-    end
+    opkg = opkg.project.packages.find_by_name(opkg.linkinfo['package']) if opkg.project.is_maintenance_release? && opkg.is_link?
 
     opkg.find_project_local_linking_packages.each do |p|
       name = p.name
@@ -1084,11 +1068,11 @@ class Package < ApplicationRecord
     bp.verifymd5 = dir['verifymd5']
     bp.changesmd5 = dir['changesmd5']
     bp.expandedmd5 = dir['srcmd5']
-    if dir['revtime'].blank? # no commit, no revtime
-      bp.maxmtime = nil
-    else
-      bp.maxmtime = Time.at(Integer(dir['revtime']))
-    end
+    bp.maxmtime = if dir['revtime'].blank? # no commit, no revtime
+                    nil
+                  else
+                    Time.at(Integer(dir['revtime']))
+                  end
 
     # now check the unexpanded sources
     update_backendinfo_unexpanded(bp)
@@ -1191,9 +1175,7 @@ class Package < ApplicationRecord
     delete_opt[:user] = User.session!.login
     delete_opt[:comment] = opt[:comment] if opt[:comment]
 
-    unless User.session!.can_modify?(self)
-      raise DeleteFileNoPermission, 'Insufficient permissions to delete file'
-    end
+    raise DeleteFileNoPermission, 'Insufficient permissions to delete file' unless User.session!.can_modify?(self)
 
     Backend::Connection.delete source_path(name, delete_opt)
     sources_changed
@@ -1240,7 +1222,7 @@ class Package < ApplicationRecord
   # the revision might match a backend revision that is not in _history
   # e.g. on expanded links - in this case we return nil
   def commit(rev = nil)
-    if rev && rev.to_i < 0
+    if rev && rev.to_i.negative?
       # going backward from not yet known current revision, find out ...
       r = self.rev.to_i + rev.to_i + 1
       rev = r.to_s
@@ -1269,9 +1251,7 @@ class Package < ApplicationRecord
     logger.debug "storing file: filename: #{opt[:filename]}, comment: #{opt[:comment]}"
 
     Package.verify_file!(self, opt[:filename], content)
-    unless User.session!.can_modify?(self)
-      raise PutFileNoPermission, "Insufficient permissions to store file in package #{name}, project #{project.name}"
-    end
+    raise PutFileNoPermission, "Insufficient permissions to store file in package #{name}, project #{project.name}" unless User.session!.can_modify?(self)
 
     params = {}
     params[:comment] = opt[:comment] if opt[:comment]

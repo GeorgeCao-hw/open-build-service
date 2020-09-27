@@ -52,12 +52,19 @@ class Relationship < ApplicationRecord
   scope :maintainers, lambda {
     where(role_id: Role.hashed['maintainer'])
   }
+  scope :bugowners, lambda {
+    where(role_id: Role.hashed['bugowner'])
+  }
+
+  scope :bugowners_with_email, lambda {
+    bugowners.joins(:user).merge(User.with_email)
+  }
 
   # we only care for project<->user relationships, but the cache is not *that* expensive
   # to recalculate
   after_create :discard_cache
-  after_rollback :discard_cache
   after_destroy :discard_cache
+  after_rollback :discard_cache
 
   RELATIONSHIP_CACHE_SEQUENCE = 'cache_sequence_for_forbidden_projects'.freeze
 

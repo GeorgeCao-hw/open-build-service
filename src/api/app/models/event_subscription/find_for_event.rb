@@ -28,9 +28,7 @@ class EventSubscription
 
           if receiver_subscription.present?
             # Use the receiver's subscription if it exists
-            if receiver_subscription.enabled?
-              receivers_and_subscriptions[receiver] = receiver_subscription
-            end
+            receivers_and_subscriptions[receiver] = receiver_subscription if receiver_subscription.enabled?
 
           # Only check the default_subscription if there is no receiver's subscription
           elsif default_subscription.present? && default_subscription.enabled?
@@ -54,10 +52,11 @@ class EventSubscription
       new_receivers = []
 
       receivers.each do |receiver|
-        if receiver.is_a?(User)
+        case receiver
+        when User
           new_receivers << receiver
 
-        elsif receiver.is_a?(Group)
+        when Group
 
           if receiver.email.present?
             new_receivers << receiver

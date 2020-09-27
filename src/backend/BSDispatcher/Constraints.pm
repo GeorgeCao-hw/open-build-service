@@ -111,6 +111,7 @@ sub oracle {
     my $memory = ($worker->{'hardware'}->{'memory'} || 0);
     my $swap = ($worker->{'hardware'}->{'swap'} || 0);
     return 0 if $constraints->{'hardware'}->{'memory'} && getmbsize($constraints->{'hardware'}->{'memory'}) > ( $memory + $swap );
+    return 0 if $constraints->{'hardware'}->{'memoryperjob'} && getmbsize($constraints->{'hardware'}->{'memoryperjob'}) * ($worker->{'hardware'}->{'jobs'} || 1) > ( $memory + $swap );
     return 0 if $constraints->{'hardware'}->{'physicalmemory'} && getmbsize($constraints->{'hardware'}->{'physicalmemory'}) > $memory;
     if ($constraints->{'hardware'}->{'cpu'}) {
       return 0 unless $worker->{'hardware'}->{'cpu'};
@@ -159,6 +160,41 @@ sub mergeconstraints {
   }
   return $con;
 }
+
+sub overwrite {
+  my ($dst, $src) = @_;
+  for my $k (sort keys %$src) {
+    next if $k eq "conditions";
+    my $d = $src->{$k};
+    if (!exists($dst->{$k}) || !ref($d) || ref($d) ne 'HASH') {
+      $dst->{$k} = $d;
+    } else {
+      overwrite($dst->{$k}, $d);
+    }
+  }
+}
+
+sub overwriteconstraints {
+  my ($info, $constraints) = @_;
+  # use condition specific constraints to merge it properly
+  for my $o (@{$constraints->{'overwrite'}||[]}) {
+    next unless $o && $o->{'conditions'};
+    if ($o->{'conditions'}->{'arch'}) {
+      next unless grep {$_ eq $info->{'arch'}} @{$o->{'conditions'}->{'arch'}};
+    }
+    if ($o->{'conditions'}->{'package'}) {
+      my $packagename = $info->{'package'};
+      my $shortpackagename = $info->{'package'};
+      $shortpackagename =~ s/\..*//;
+      next unless grep {$_ eq $packagename or $_ eq $shortpackagename} @{$o->{'conditions'}->{'package'}};
+    }
+    # conditions are matching, overwrite...
+    $constraints = BSUtil::clone($constraints);
+    overwrite($constraints, $o);
+  }
+  return $constraints;
+}
+
 
 # constructs a data object from a list and a XML::Structured dtd
 sub list2struct {
@@ -242,5 +278,7 @@ sub list2struct {
   }
   return $top;
 }
+
+
 
 1;

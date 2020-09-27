@@ -21,9 +21,10 @@ module Suse
       # is the owner of the project
       logger.debug "User #{@user.login} wants to change the project"
 
-      if project.is_a?(Project)
+      case project
+      when Project
         prj = project
-      elsif project.is_a?(String)
+      when String
         prj = Project.find_by_name(project)
         # avoid remote projects
         return false unless prj.is_a?(Project)
@@ -49,14 +50,10 @@ module Suse
       if package.is_a?(Package)
         pkg = package
       else
-        if project.nil?
-          raise 'autofetch of project only works with objects of class Package'
-        end
+        raise 'autofetch of project only works with objects of class Package' if project.nil?
 
         pkg = Package.find_by_project_and_name(project, package)
-        if pkg.nil?
-          raise ArgumentError, "unable to find package object for #{project} / #{package}"
-        end
+        raise ArgumentError, "unable to find package object for #{project} / #{package}" if pkg.nil?
       end
 
       return true if @user.can_modify?(pkg)
@@ -70,14 +67,14 @@ module Suse
       if @user
         if @user.has_global_permission?(perm.to_s)
           logger.debug "User #{@user.login} has permission #{perm}"
-          return true
+          true
         else
           logger.debug "User #{@user.login} does NOT have permission #{perm}"
-          return false
+          false
         end
       else
         logger.debug 'Permission check failed because no user is checked in'
-        return false
+        false
       end
     end
 

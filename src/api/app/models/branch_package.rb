@@ -82,15 +82,19 @@ class BranchPackage
     # create branch project
     tprj = create_branch_project
 
-    unless User.session!.can_modify?(tprj)
-      raise Project::WritePermissionError, "no permission to modify project '#{@target_project}' while executing branch project command"
-    end
+    raise Project::WritePermissionError, "no permission to modify project '#{@target_project}' while executing branch project command" unless User.session!.can_modify?(tprj)
 
     # all that worked ? :)
     { data: create_branch_packages(tprj) }
   end
 
   private
+
+  def add_request_cloned_attribute(project)
+    type = AttribType.find_by_namespace_and_name!('OBS', 'RequestCloned')
+    value = AttribValue.new(value: params[:request], position: 1)
+    Attrib.create(project: project, attrib_type: type, values: [value])
+  end
 
   def add_autocleanup_attribute(tprj)
     at = AttribType.find_by_namespace_and_name!('OBS', 'AutoCleanup')
@@ -128,9 +132,7 @@ class BranchPackage
         p[:copy_from_devel] = p[:package]
       end
     else
-      unless p[:link_target_project].is_a?(Project) && p[:link_target_project].find_attribute('OBS', 'BranchTarget')
-        p[:link_target_project] = update_project
-      end
+      p[:link_target_project] = update_project unless p[:link_target_project].is_a?(Project) && p[:link_target_project].find_attribute('OBS', 'BranchTarget')
       update_pkg = update_project.find_package(pkg_name, true) # true for check_update_package in older service pack projects
       if update_pkg
         # We have no package in the update project yet, but sources are reachable via project link
@@ -178,9 +180,7 @@ class BranchPackage
       # no find_package call here to check really this project only
       tpkg = tprj.packages.find_by_name(pack_name)
       if tpkg
-        unless params[:force]
-          raise DoubleBranchPackageError.new(tprj.name, tpkg.name), "branch target package already exists: #{tprj.name}/#{tpkg.name}"
-        end
+        raise DoubleBranchPackageError.new(tprj.name, tpkg.name), "branch target package already exists: #{tprj.name}/#{tpkg.name}" unless params[:force]
       else
         if pac.is_a?(Package)
           tpkg = tprj.packages.new(name: pack_name, title: pac.title, description: pac.description)
@@ -188,9 +188,7 @@ class BranchPackage
         else
           tpkg = tprj.packages.new(name: pack_name)
         end
-        if tpkg.bcntsynctag && @extend_names
-          tpkg.bcntsynctag << '.' + p[:link_target_project].name.tr(':', '_')
-        end
+        tpkg.bcntsynctag << '.' + p[:link_target_project].name.tr(':', '_') if tpkg.bcntsynctag && @extend_names
         tpkg.releasename = p[:release_name]
       end
       tpkg.store
@@ -225,21 +223,21 @@ class BranchPackage
         end
         tpkg.branch_from(oproject, opackage, opts)
 
-        if response
-          # multiple package transfers, just tell the target project
-          response = { targetproject: tpkg.project.name }
-        else
-          # just a single package transfer, detailed answer
-          response = { targetproject: tpkg.project.name, targetpackage: tpkg.name, sourceproject: oproject, sourcepackage: opackage }
-        end
+        response = if response
+                     # multiple package transfers, just tell the target project
+                     { targetproject: tpkg.project.name }
+                   else
+                     # just a single package transfer, detailed answer
+                     { targetproject: tpkg.project.name, targetpackage: tpkg.name, sourceproject: oproject, sourcepackage: opackage }
+                   end
 
         # fetch newer sources from devel package, if defined
         if p[:copy_from_devel] && p[:copy_from_devel].project != tpkg.project && !p[:rev]
-          if p[:copy_from_devel].project.is_maintenance_incident?
-            msg = "fetch updates from open incident project #{p[:copy_from_devel].project.name}"
-          else
-            msg = "fetch updates from devel package #{p[:copy_from_devel].project.name}/#{p[:copy_from_devel].name}"
-          end
+          msg = if p[:copy_from_devel].project.is_maintenance_incident?
+                  "fetch updates from open incident project #{p[:copy_from_devel].project.name}"
+                else
+                  "fetch updates from devel package #{p[:copy_from_devel].project.name}/#{p[:copy_from_devel].name}"
+                end
           Backend::Api::Sources::Package.copy(tpkg.project.name, tpkg.name, p[:copy_from_devel].project.name, p[:copy_from_devel].name,
                                               User.session!.login, comment: msg, keeplink: 1, expand: 1)
         end
@@ -266,16 +264,12 @@ class BranchPackage
 
   def create_branch_project
     if Project.exists_by_name(@target_project)
-      if @noaccess
-        raise CreateProjectNoPermission, "The destination project already exists, so the api can't make it not readable"
-      end
+      raise CreateProjectNoPermission, "The destination project already exists, so the api can't make it not readable" if @noaccess
 
       tprj = Project.get_by_name(@target_project)
     else
       # permission check
-      unless User.session!.can_create_project?(@target_project)
-        raise CreateProjectNoPermission, "no permission to create project '#{@target_project}' while executing branch command"
-      end
+      raise CreateProjectNoPermission, "no permission to create project '#{@target_project}' while executing branch command" unless User.session!.can_create_project?(@target_project)
 
       title = "Branch project for package #{params[:package]}"
       description = "This project was created for package #{params[:package]} via attribute #{@attribute}"
@@ -284,23 +278,13 @@ class BranchPackage
         description = "This project was created as a clone of request #{params[:request]}"
       end
       @add_repositories = true # new projects shall get repositories
-      Project.transaction do
-        tprj = Project.create(name: @target_project, title: title, description: description)
-        tprj.relationships.build(user: User.session!, role: Role.find_by_title!('maintainer'))
-        tprj.flags.create(flag: 'build', status: 'disable') if @extend_names
-        tprj.flags.create(flag: 'access', status: 'disable') if @noaccess
-        tprj.store
-        add_autocleanup_attribute(tprj) if @auto_cleanup
-      end
-      if params[:request]
-        ans = AttribNamespace.find_by_name('OBS')
-        at = ans.attrib_types.find_by(name: 'RequestCloned')
-
-        tprj = Project.get_by_name(@target_project)
-        a = Attrib.new(project: tprj, attrib_type: at)
-        a.values << AttribValue.new(value: params[:request], position: 1)
-        a.save
-      end
+      tprj = Project.new(name: @target_project, title: title, description: description)
+      tprj.relationships.new(user: User.session!, role: Role.find_by_title!('maintainer'))
+      tprj.flags.new(flag: 'build', status: 'disable') if @extend_names
+      tprj.flags.new(flag: 'access', status: 'disable') if @noaccess
+      tprj.store
+      add_autocleanup_attribute(tprj) if @auto_cleanup
+      add_request_cloned_attribute(tprj) if params[:request]
     end
     tprj
   end
@@ -375,9 +359,7 @@ class BranchPackage
       # is the package itself a local link ?
       link = Backend::Api::Sources::Package.link_info(p[:package].project.name, p[:package].name)
       ret = Xmlhash.parse(link)
-      if !ret['project'] || ret['project'] == p[:package].project.name
-        pkg = Package.get_by_project_and_name(p[:package].project.name, ret['package'])
-      end
+      pkg = Package.get_by_project_and_name(p[:package].project.name, ret['package']) if !ret['project'] || ret['project'] == p[:package].project.name
     end
 
     pkg.find_project_local_linking_packages.each do |llp|
@@ -429,9 +411,7 @@ class BranchPackage
       req = BsRequest.find_by_number(params[:request])
 
       req.bs_request_actions.each do |action|
-        if action.source_package
-          pkg = Package.get_by_project_and_name(action.source_project, action.source_package)
-        end
+        pkg = Package.get_by_project_and_name(action.source_project, action.source_package) if action.source_package
 
         @packages.push(link_target_project: action.source_project, package: pkg, target_package: "#{pkg.name}.#{pkg.project.name}")
       end
@@ -487,13 +467,11 @@ class BranchPackage
           # FIXME: this will not find packages on linked remote projects
           ltprj = lprj
           pkg2 = lprj.find_package(params[:package])
-          next if pkg2.nil? || @packages.map { |p| p[:package] }.include?(pkg2) # avoid double instances
+          next if pkg2.nil? || @packages.pluck(:package).include?(pkg2) # avoid double instances
 
           logger.info "Found package instance via project link in #{pkg2.project.name}/#{pkg2.name}" \
                       "for attribute #{at.name} and given package name #{params[:package]}"
-          if ltprj.find_attribute('OBS', 'BranchTarget').nil?
-            ltprj = pkg2.project
-          end
+          ltprj = pkg2.project if ltprj.find_attribute('OBS', 'BranchTarget').nil?
           @packages.push(base_project: pkg2.project, link_target_project: ltprj,
                          package: pkg2, target_package: "#{pkg2.name}.#{pkg2.project.name}")
         end
@@ -525,9 +503,7 @@ class BranchPackage
   def set_update_project_attribute
     aname = params[:update_project_attribute] || 'OBS:UpdateProject'
     update_project_at = aname.split(/:/)
-    if update_project_at.length != 2
-      raise ArgumentError, "attribute '#{aname}' must be in the $NAMESPACE:$NAME style"
-    end
+    raise ArgumentError, "attribute '#{aname}' must be in the $NAMESPACE:$NAME style" if update_project_at.length != 2
 
     @up_attribute_namespace = update_project_at[0]
     @up_attribute_name = update_project_at[1]

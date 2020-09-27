@@ -304,9 +304,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_equal(node.elements('state').first.value('when'), node.elements('history').last.value('when'), 'Current state is has NOT same time as last history item')
     oldhistory = nil
     node.elements('history') do |h|
-      unless h
-        assert((h.value('when') > oldhistory.value('when')), 'Current history is not newer than the former history')
-      end
+      assert((h.value('when') > oldhistory.value('when')), 'Current history is not newer than the former history') unless h
       oldhistory = h
     end
 
@@ -448,15 +446,15 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     post '/request?cmd=create', params: load_backend_file('request/no_such_user')
     assert_response 404
-    assert_xml_tag(tag: 'status', attributes: { code: 'not_found' }, child: { content: %r{Couldn.t find User} })
+    assert_xml_tag(tag: 'status', attributes: { code: 'not_found' }, child: { content: /Couldn.t find User/ })
 
     post '/request?cmd=create', params: load_backend_file('request/no_such_group')
     assert_response 404
-    assert_xml_tag(tag: 'status', attributes: { code: 'not_found' }, child: { content: %r{Couldn.t find Group} })
+    assert_xml_tag(tag: 'status', attributes: { code: 'not_found' }, child: { content: /Couldn.t find Group/ })
 
     post '/request?cmd=create', params: load_backend_file('request/no_such_role')
     assert_response 404
-    assert_xml_tag(tag: 'status', attributes: { code: 'not_found' }, child: { content: %r{Couldn.t find Role} })
+    assert_xml_tag(tag: 'status', attributes: { code: 'not_found' }, child: { content: /Couldn.t find Role/ })
 
     post '/request?cmd=create', params: load_backend_file('request/no_such_target_project')
     assert_response 404
@@ -1362,6 +1360,80 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(tag: 'target', attributes: { project: 'HiddenProject' })
   end
 
+  def test_release_package_via_request
+    login_adrian
+    # define manual release target
+    put '/source/home:adrian:RT/_meta', params: "<project name='home:adrian:RT'> <title/> <description/>
+          <repository name='rt'>
+            <arch>i586</arch>
+            <arch>x86_64</arch>
+          </repository>
+        </project>"
+    assert_response :success
+
+    run_scheduler('i586')
+    run_scheduler('x86_64')
+
+    login_Iggy
+    get '/source/home:Iggy/_meta'
+    assert_response :success
+    orig_project_meta = @response.body
+    doc = REXML::Document.new(@response.body)
+    rt = doc.elements["/project/repository'"].add_element 'releasetarget'
+    rt.add_attribute(REXML::Attribute.new('project', 'home:adrian:RT'))
+    rt.add_attribute(REXML::Attribute.new('repository', 'rt'))
+    rt.add_attribute(REXML::Attribute.new('trigger', 'manual'))
+    put '/source/home:Iggy/_meta', params: doc.to_s
+    assert_response :success
+
+    # create request
+    post '/request?cmd=create&ignore_build_state=1', params: "<request>
+                                   <action type='release'>
+                                     <source project='home:Iggy' package='TestPack' />
+                                   </action>
+                                   <state name='new' />
+                                 </request>"
+    assert_response :success
+    assert_xml_tag tag: 'source', attributes: { project: 'home:Iggy', package: 'TestPack' }
+    assert_xml_tag tag: 'target', attributes: { project: 'home:adrian:RT', package: 'TestPack', repository: 'rt' }
+    node = Xmlhash.parse(@response.body)
+    assert node['id']
+    reqid = node['id']
+
+    # release via request, ignoring reviewers
+    login_adrian
+    post "/request/#{reqid}?cmd=changestate&newstate=accepted&force=1"
+    assert_response :success
+    assert_xml_tag tag: 'status', attributes: { code: 'ok' }
+
+    # process events
+    run_scheduler('i586')
+
+    # verify result
+    get '/source/home:adrian:RT'
+    assert_response :success
+    assert_xml_tag tag: 'entry', attributes: { name: 'TestPack' }
+
+    # check released binaries
+    get '/build/home:Iggy/10.2/i586/TestPack/'
+    assert_response :success
+    assert_xml_tag tag: 'binarylist', children: { count: 4 }
+    assert_xml_tag tag: 'binary', attributes: { filename: 'package-1.0-1.i586.rpm' }
+
+    get '/build/home:adrian:RT/rt/i586/TestPack/'
+    assert_response :success
+    assert_xml_tag tag: 'binarylist', children: { count: 4 }
+    assert_xml_tag tag: 'binary', attributes: { filename: 'package-1.0-1.i586.rpm' }
+
+    # cleanup
+    login_Iggy
+    put '/source/home:Iggy/_meta', params: orig_project_meta
+    assert_response :success
+    login_adrian
+    delete '/source/home:adrian:RT'
+    assert_response :success
+  end
+
   def test_process_devel_request
     login_king
 
@@ -2235,7 +2307,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_match(/review state change for project BaseDistro is not permitted for adrian/, @response.body)
     post "/request/#{id}?cmd=changereviewstate&newstate=accepted&by_user=adrian&by_project=BaseDistro&by_package=pack2"
     assert_response 403
-    assert_match(/review state change for package BaseDistro\/pack2 is not permitted for adrian/, @response.body)
+    assert_match(%r{review state change for package BaseDistro/pack2 is not permitted for adrian}, @response.body)
 
     # approve reviews for real
     post "/request/#{id}?cmd=changereviewstate&newstate=accepted&by_user=adrian"
@@ -3455,7 +3527,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     id = Xmlhash.parse(@response.body)['id']
 
-    assert !BsRequest.find_by_number(id).is_target_maintainer?(User.session), 'tom is not target maintainer'
+    assert_not BsRequest.find_by_number(id).is_target_maintainer?(User.session), 'tom is not target maintainer'
   end
 
   def test_cleanup_from_home

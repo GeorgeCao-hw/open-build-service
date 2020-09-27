@@ -23,7 +23,7 @@ class Repository < ApplicationRecord
 
   validates :name, length: { in: 1..200 }
   # Keep in sync with src/backend/BSVerify.pm
-  validates :name, format: { with: /\A[^_:\/\000-\037][^:\/\000-\037]*\Z/,
+  validates :name, format: { with: %r{\A[^_:/\000-\037][^:/\000-\037]*\Z},
                              message: "must not start with '_' or contain any of these characters ':/'" }
 
   # Name has to be unique among local repositories and remote_repositories of the associated db_project.
@@ -54,11 +54,9 @@ class Repository < ApplicationRecord
     # no local repository found, check if remote repo possible
 
     local_project, remote_project = Project.find_remote_project(project)
-    if local_project
-      return local_project.repositories.find_or_create_by(name: repo, remote_project_name: remote_project)
-    end
+    return local_project.repositories.find_or_create_by(name: repo, remote_project_name: remote_project) if local_project
 
-    return
+    nil
   end
 
   def self.find_by_project_and_path(project, path)

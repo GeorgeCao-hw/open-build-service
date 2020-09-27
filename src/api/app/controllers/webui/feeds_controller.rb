@@ -5,7 +5,7 @@ class Webui::FeedsController < Webui::WebuiController
   before_action :set_project, only: [:commits]
 
   def news
-    @news = StatusMessage.alive.includes(:user).limit(5)
+    @news = StatusMessage.newest.for_current_user.includes(:user).limit(5)
   end
 
   def latest_updates
@@ -40,13 +40,13 @@ class Webui::FeedsController < Webui::WebuiController
 
   def starting_at(date)
     Time.zone.parse(date)
-  rescue
+  rescue StandardError
     7.days.ago
   end
 
   def ending_at(date)
     Time.zone.parse(date)
-  rescue
+  rescue StandardError
     nil
   end
 end

@@ -72,7 +72,7 @@ class Webui::RequestController < Webui::WebuiController
     review_params[:by_project] = review.by_project
     review_params[:by_user] = review.by_user
     review_params[:by_group] = review.by_group
-    return review_params, review.bs_request
+    [review_params, review.bs_request]
   end
 
   def modify_review
@@ -113,7 +113,7 @@ class Webui::RequestController < Webui::WebuiController
 
     # search for a project, where the user is not a package maintainer but a project maintainer and show
     # a hint if that package has some package maintainers (issue#1970)
-    @show_project_maintainer_hint = !@package_maintainers.empty? && !@package_maintainers.include?(User.session) && any_project_maintained_by_current_user?
+    @show_project_maintainer_hint = !@package_maintainers.empty? && @package_maintainers.exclude?(User.session) && any_project_maintained_by_current_user?
     @comments = @bs_request.comments
     @comment = Comment.new
 
@@ -237,7 +237,7 @@ class Webui::RequestController < Webui::WebuiController
     return if @diff_to_superseded
 
     flash[:error] = "Request #{params[:diff_to_superseded]} does not exist or is not superseded by request #{@bs_request.number}."
-    return
+    nil
   end
 
   def require_request

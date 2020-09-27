@@ -301,6 +301,7 @@ our $projpack = [
 	    'name',
 	    'kind',
 	     [],
+	    'error',
 	    'title',
 	    'description',
 	    'config',
@@ -1758,6 +1759,7 @@ our @constraint = (
 	    'jobs',
 	  [ 'disk' => $size ],
 	  [ 'memory' => $size ],
+	  [ 'memoryperjob' => $size ],
 	  [ 'physicalmemory' => $size ],
       ]
 );
@@ -1933,6 +1935,7 @@ our $report = [
 	    'buildtime',
 	    'buildhost',
 	    'disturl',
+	    'license',
 	    'binaryid',
 	    'supportstatus',
 	    'cpeid',
@@ -1967,6 +1970,7 @@ our $pubkeyinfo = [
 	'keyid',
 	'userid',
 	'algo',
+	'curve',
 	'keysize',
 	'expires',
 	'fingerprint',
@@ -1979,9 +1983,11 @@ our $certinfo = [
 	'issuer',
 	'subject',
 	'algo',
+	'curve',
 	'keysize',
 	'begins',
 	'expires',
+	'fingerprint',
 	'_content',
 ];
 

@@ -52,13 +52,15 @@ OBSApi::Application.routes.draw do
     resources :package, only: [:index], controller: 'webui/package', constraints: cons
 
     controller 'webui/package' do
-      get 'package/edit/:project/:package' => :edit, constraints: cons, as: 'edit_package'
-      patch 'package/update' => :update, constraints: cons
-      get 'package/show/:project/:package' => :show, as: 'package_show', constraints: cons
+      defaults format: 'js' do
+        get 'package/edit/:project/:package' => :edit, constraints: cons, as: 'edit_package'
+        patch 'package/update' => :update, constraints: cons
+      end
     end
 
     defaults format: 'html' do
       controller 'webui/package' do
+        get 'package/show/:project/:package' => :show, as: 'package_show', constraints: cons
         get 'package/branch_diff_info/:project/:package' => :branch_diff_info, as: 'package_branch_diff_info', constraints: cons
         get 'package/dependency/:project/:package' => :dependency, constraints: cons, as: 'package_dependency'
         get 'package/binary/:project/:package/:repository/:arch/:filename' => :binary, constraints: cons, as: 'package_binary'
@@ -285,7 +287,7 @@ OBSApi::Application.routes.draw do
     end
 
     controller 'webui/search' do
-      match 'search' => :index, via: [:get, :post]
+      get 'search' => :index
       get 'search/owner' => :owner
       get 'search/issue' => :issue
     end
@@ -335,22 +337,22 @@ OBSApi::Application.routes.draw do
     resource :session, only: [:new, :create, :destroy], controller: 'webui/session'
 
     controller 'webui/groups/bs_requests' do
-      get 'groups/(:title)/requests' => :index, constraints: { title: /[^\/]*/ }, as: 'group_requests'
+      get 'groups/(:title)/requests' => :index, constraints: { title: %r{[^/]*} }, as: 'group_requests'
     end
 
     controller 'webui/groups' do
       get 'groups' => :index
-      get 'group/show/:title' => :show, constraints: { title: /[^\/]*/ }, as: 'group_show'
+      get 'group/show/:title' => :show, constraints: { title: %r{[^/]*} }, as: 'group_show'
       get 'group/new' => :new
       post 'group/create' => :create
       get 'group/autocomplete' => :autocomplete, as: 'autocomplete_groups'
     end
 
-    resources :groups, only: [], param: :title, constraints: { title: /[^\/]*/ } do
+    resources :groups, only: [], param: :title, constraints: { title: %r{[^/]*} } do
       resources :user, only: [:create, :destroy, :update], constraints: cons, param: :user_login, controller: 'webui/groups/users'
     end
 
-    resources :comments, constraints: cons, only: [:create, :destroy], controller: 'webui/comments'
+    resources :comments, constraints: cons, only: [:create, :destroy, :update], controller: 'webui/comments'
 
     ### /apidocs
     get 'apidocs', to: redirect('/apidocs/index')

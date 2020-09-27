@@ -13,11 +13,11 @@ class PersonController < ApplicationController
   before_action :set_user, only: [:post_userinfo, :change_my_password]
 
   def show
-    if params[:prefix]
-      @list = User.where('login LIKE ?', params[:prefix] + '%')
-    else
-      @list = User.all
-    end
+    @list = if params[:prefix]
+              User.where('login LIKE ?', params[:prefix] + '%')
+            else
+              User.all
+            end
   end
 
   def login
@@ -180,9 +180,7 @@ class PersonController < ApplicationController
     status = xml.elements['/unregisteredperson/state'].text if xml.elements['/unregisteredperson/status']
 
     if authenticator.proxy_mode?
-      if request.env['HTTP_X_USERNAME'].blank?
-        raise ErrRegisterSave, 'Missing iChain header'
-      end
+      raise ErrRegisterSave, 'Missing iChain header' if request.env['HTTP_X_USERNAME'].blank?
 
       login = request.env['HTTP_X_USERNAME']
       email = request.env['HTTP_X_EMAIL'] if request.env['HTTP_X_EMAIL'].present?
@@ -195,7 +193,7 @@ class PersonController < ApplicationController
     render_ok
   rescue Exception => e
     # Strip passwords from request environment and re-raise exception
-    request.env['RAW_POST_DATA'] = request.env['RAW_POST_DATA'].sub(/<password>(.*)<\/password>/, '<password>STRIPPED<password>')
+    request.env['RAW_POST_DATA'] = request.env['RAW_POST_DATA'].sub(%r{<password>(.*)</password>}, '<password>STRIPPED<password>')
     raise e
   end
 
